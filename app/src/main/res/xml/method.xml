@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.bopomofo.t9ime.MainActivity">
+    <subtype
+        android:label="@string/subtype_zh_tw"
+        android:imeSubtypeLocale="zh_TW"
+        android:imeSubtypeMode="keyboard" />
+</input-method>

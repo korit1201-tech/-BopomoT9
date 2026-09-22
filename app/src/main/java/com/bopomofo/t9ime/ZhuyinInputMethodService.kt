@@ -1,0 +1,831 @@
+package com.bopomofo.t9ime
+
+import android.annotation.SuppressLint
+import android.graphics.Color
+import android.inputmethodservice.InputMethodService
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.View
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.content.Context
+import android.media.AudioManager
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.provider.Settings
+import android.view.HapticFeedbackConstants
+import androidx.core.content.ContextCompat
+import com.bopomofo.t9ime.engine.ChineseConverter
+import com.bopomofo.t9ime.engine.DictEntry
+import com.bopomofo.t9ime.engine.ZhuyinT9Engine
+import com.bopomofo.t9ime.ui.SwipeKeyButton
+
+/**
+ * 繁體注音 12 鍵 Android 輸入法服務（完整進階版）
+ */
+class ZhuyinInputMethodService : InputMethodService() {
+
+    enum class KeyboardMode {
+        ZHUYIN,         // 12 鍵注音
+        NUMBER_SYM,     // 12 鍵數字/符號
+        ENGLISH_T9,     // 12 鍵英文 (T9 9-Key Multi-tap)
+        ENGLISH_QWERTY  // 26 鍵英文全鍵盤
+    }
+
+    private var currentMode = KeyboardMode.ZHUYIN
+    private var isSimplified = false // 繁體 / 簡體 切換狀態
+    private var isCapsLock = false   // 大小寫切換狀態
+    private var lastCommittedWord: String? = null
+
+    // Multi-tap 狀態追蹤 (9 鍵英文連按輪替：A -> B -> C)
+    private var lastT9Key = -1
+    private var lastT9CharIndex = 0
+    private var lastT9Time = 0L
+    private val MULTI_TAP_TIMEOUT = 1000L // 1 秒內連按同一鍵切換字母
+
+    private lateinit var engine: ZhuyinT9Engine
+    private lateinit var candidateContainer: LinearLayout
+    private lateinit var layoutSymbols: LinearLayout
+    private lateinit var scrollZhuyinCombos: ScrollView
+    private lateinit var containerZhuyinCombos: LinearLayout
+
+    private lateinit var layout12Key: LinearLayout
+    private lateinit var layoutQwerty: LinearLayout
+    private var rootView: View? = null
+
+    private var vibrator: Vibrator? = null
+
+    private lateinit var btnMode123: Button
+    private lateinit var btnLangToggle: Button
+    private lateinit var btnSpaceSwipe: SwipeKeyButton
+    private lateinit var btnQwertyToggle: Button
+
+    private val repeatHandler = Handler(Looper.getMainLooper())
+    private var isRepeatingBackspace = false
+    private val INITIAL_REPEAT_DELAY = 400L
+    private val REPEAT_INTERVAL = 60L
+
+    private val backspaceRunnable = object : Runnable {
+        override fun run() {
+            if (isRepeatingBackspace) {
+                performBackspace()
+                repeatHandler.postDelayed(this, REPEAT_INTERVAL)
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        engine = ZhuyinT9Engine(this)
+        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+            vibratorManager?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+    }
+
+    /**
+     * 檢查系統設定：若使用者開啟了觸控震動反饋（Haptic Feedback），則觸發輕微按鍵震動
+     */
+    private fun triggerHapticFeedback() {
+        try {
+            val isHapticEnabled = Settings.System.getInt(
+                contentResolver,
+                Settings.System.HAPTIC_FEEDBACK_ENABLED,
+                0
+            ) != 0
+
+            if (!isHapticEnabled) return
+
+            // 優先使用 View 的標準 KEYPRESS 觸覺反饋
+            val handled = rootView?.performHapticFeedback(
+                HapticFeedbackConstants.KEYBOARD_TAP,
+                HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+            ) ?: false
+
+            if (!handled && vibrator != null && vibrator?.hasVibrator() == true) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val effect = VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK)
+                    vibrator?.vibrate(effect)
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val effect = VibrationEffect.createOneShot(20, VibrationEffect.DEFAULT_AMPLITUDE)
+                    vibrator?.vibrate(effect)
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator?.vibrate(20)
+                }
+            }
+        } catch (_: Exception) {
+            // 忽略非致命震動異常
+        }
+    }
+
+    override fun onCreateInputView(): View {
+        val root = layoutInflater.inflate(R.layout.keyboard_view, null)
+        rootView = root
+        candidateContainer = root.findViewById(R.id.candidate_container)
+        layoutSymbols = root.findViewById(R.id.layout_symbols)
+        scrollZhuyinCombos = root.findViewById(R.id.scroll_zhuyin_combos)
+        containerZhuyinCombos = root.findViewById(R.id.container_zhuyin_combos)
+
+        layout12Key = root.findViewById(R.id.layout_12key)
+        layoutQwerty = root.findViewById(R.id.layout_qwerty)
+
+        btnMode123 = root.findViewById(R.id.btn_mode_123)
+        btnLangToggle = root.findViewById(R.id.btn_lang_toggle)
+        btnSpaceSwipe = root.findViewById(R.id.btn_space_swipe)
+        btnQwertyToggle = root.findViewById(R.id.btn_qwerty_toggle)
+
+        setup12KeyLayout(root)
+        setupQwertyLayout(root)
+        setupSideActions(root)
+        setupBottomActions(root)
+
+        updateKeyboardModeUI()
+        return root
+    }
+
+    private fun setup12KeyLayout(root: View) {
+        val keyIds = listOf(
+            R.id.key_k1 to 1, R.id.key_k2 to 2, R.id.key_k3 to 3,
+            R.id.key_k4 to 4, R.id.key_k5 to 5, R.id.key_k6 to 6,
+            R.id.key_k7 to 7, R.id.key_k8 to 8, R.id.key_k9 to 9,
+            R.id.key_k10 to 10, R.id.key_k11 to 11, R.id.key_k12 to 12
+        )
+
+        for ((viewId, keyNum) in keyIds) {
+            val btn = root.findViewById<SwipeKeyButton>(viewId) ?: continue
+
+            btn.onTapListener = {
+                triggerHapticFeedback()
+                when (currentMode) {
+                    KeyboardMode.ZHUYIN -> {
+                        lastCommittedWord = null
+                        if (keyNum == 11) {
+                            val (_, candidates) = engine.cycleTone()
+                            refreshUI(candidates)
+                        } else {
+                            val candidates = engine.pressKey(keyNum)
+                            refreshUI(candidates)
+                        }
+                    }
+                    KeyboardMode.NUMBER_SYM -> {
+                        val numChar = getNumberChar(keyNum)
+                        commitTextDirectly(numChar)
+                    }
+                    KeyboardMode.ENGLISH_T9 -> {
+                        handleT9EnglishTap(keyNum)
+                    }
+                    else -> {}
+                }
+            }
+
+            btn.onSwipeListener = { direction ->
+                triggerHapticFeedback()
+                if (currentMode == KeyboardMode.ZHUYIN) {
+                    val zhuyin = getSwipeZhuyin(keyNum, direction)
+                    if (zhuyin != null) commitTextDirectly(zhuyin.toString())
+                } else if (currentMode == KeyboardMode.ENGLISH_T9) {
+                    val letter = getT9EnglishSwipe(keyNum, direction)
+                    if (letter != null) {
+                        val finalChar = if (isCapsLock) letter.uppercaseChar() else letter
+                        commitTextDirectly(finalChar.toString())
+                        resetT9MultiTap()
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 9 鍵英文 Multi-tap 處理（連按同一鍵循環切換：A -> B -> C -> 2）
+     */
+    private fun handleT9EnglishTap(keyNum: Int) {
+        val charList = getT9CharsForKey(keyNum)
+        if (charList.isEmpty()) return
+
+        val now = System.currentTimeMillis()
+        if (keyNum == lastT9Key && (now - lastT9Time) < MULTI_TAP_TIMEOUT) {
+            // 同一按鍵在 1 秒內連按：先刪除前一個字元，再輸出下一個字母！
+            currentInputConnection?.deleteSurroundingText(1, 0)
+            lastT9CharIndex = (lastT9CharIndex + 1) % charList.size
+        } else {
+            // 新按鍵或超時：輸出第一個字母
+            lastT9Key = keyNum
+            lastT9CharIndex = 0
+        }
+        lastT9Time = now
+
+        val targetChar = charList[lastT9CharIndex]
+        val finalChar = if (isCapsLock) targetChar.uppercaseChar() else targetChar
+        currentInputConnection?.commitText(finalChar.toString(), 1)
+    }
+
+    private fun resetT9MultiTap() {
+        lastT9Key = -1
+        lastT9CharIndex = 0
+        lastT9Time = 0L
+    }
+
+    private fun getT9CharsForKey(keyNum: Int): List<Char> {
+        return when (keyNum) {
+            1 -> listOf('@', '.', '_', '1')
+            2 -> listOf('a', 'b', 'c', '2')
+            3 -> listOf('d', 'e', 'f', '3')
+            4 -> listOf('g', 'h', 'i', '4')
+            5 -> listOf('j', 'k', 'l', '5')
+            6 -> listOf('m', 'n', 'o', '6')
+            7 -> listOf('p', 'q', 'r', 's', '7')
+            8 -> listOf('t', 'u', 'v', '8')
+            9 -> listOf('w', 'x', 'y', 'z', '9')
+            10 -> listOf('-', '+', '*', '(')
+            11 -> listOf('/', '=', '0', ')')
+            12 -> listOf('%', '&', '#', '!')
+            else -> emptyList()
+        }
+    }
+
+    /**
+     * 26 鍵英文全鍵盤 (QWERTY Layout - 包含 Shift大小寫切換、退格鍵、逗點、句號)
+     */
+    private fun setupQwertyLayout(root: View) {
+        val row1 = root.findViewById<LinearLayout>(R.id.qwerty_row_1)
+        val row2 = root.findViewById<LinearLayout>(R.id.qwerty_row_2)
+        val row3 = root.findViewById<LinearLayout>(R.id.qwerty_row_3)
+
+        val letters1 = listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p")
+        val letters2 = listOf("a", "s", "d", "f", "g", "h", "j", "k", "l")
+        val letters3 = listOf("z", "x", "c", "v", "b", "n", "m")
+
+        row1.removeAllViews()
+        for (ch in letters1) {
+            row1.addView(createQwertyKey(ch, 1f))
+        }
+
+        row2.removeAllViews()
+        for (ch in letters2) {
+            row2.addView(createQwertyKey(ch, 1f))
+        }
+
+        row3.removeAllViews()
+
+        // 1. Shift 大小寫切換鍵 (左側)
+        val btnShift = Button(this).apply {
+            text = if (isCapsLock) "⇪" else "⇧"
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.5f).apply {
+                setMargins(2, 2, 2, 2)
+            }
+            layoutParams = params
+            setOnClickListener {
+                triggerHapticFeedback()
+                isCapsLock = !isCapsLock
+                updateQwertyKeysText()
+            }
+        }
+        row3.addView(btnShift)
+
+        // 2. 字母鍵 Z X C V B N M
+        for (ch in letters3) {
+            row3.addView(createQwertyKey(ch, 1f))
+        }
+
+        // 3. 26 鍵專屬退格鍵 (右側，支援點按與長按連續退位)
+        val btnQwertyDel = Button(this).apply {
+            text = "⌫"
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.5f).apply {
+                setMargins(2, 2, 2, 2)
+            }
+            layoutParams = params
+            setOnTouchListener { v, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.isPressed = true
+                        performBackspace()
+                        isRepeatingBackspace = true
+                        repeatHandler.postDelayed(backspaceRunnable, INITIAL_REPEAT_DELAY)
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        v.isPressed = false
+                        isRepeatingBackspace = false
+                        repeatHandler.removeCallbacks(backspaceRunnable)
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+        row3.addView(btnQwertyDel)
+    }
+
+    private fun createQwertyKey(text: String, weight: Float): Button {
+        return Button(this).apply {
+            this.text = if (isCapsLock) text.uppercase() else text.lowercase()
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key)
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
+                setMargins(2, 2, 2, 2)
+            }
+            layoutParams = params
+            setOnClickListener {
+                triggerHapticFeedback()
+                val letterToCommit = if (isCapsLock) text.uppercase() else text.lowercase()
+                commitTextDirectly(letterToCommit)
+            }
+        }
+    }
+
+    private fun updateQwertyKeysText() {
+        val root = layoutQwerty
+        setupQwertyLayout(root)
+    }
+
+    private lateinit var btnSymQuestion: Button
+    private lateinit var btnSymExclamation: Button
+    private lateinit var btnSymEllipsis: Button
+    private lateinit var btnSymColon: Button
+    private lateinit var btnComma: Button
+    private lateinit var btnPeriod: Button
+    private lateinit var btnSymAt: Button
+
+    private fun setupSideActions(root: View) {
+        btnSymQuestion = root.findViewById(R.id.btn_sym_question)
+        btnSymExclamation = root.findViewById(R.id.btn_sym_exclamation)
+        btnSymEllipsis = root.findViewById(R.id.btn_sym_ellipsis)
+        btnSymColon = root.findViewById(R.id.btn_sym_colon)
+        btnSymAt = root.findViewById(R.id.btn_sym_at)
+
+        btnSymQuestion.setOnClickListener {
+            triggerHapticFeedback()
+            commitSymbol(if (isTraditionalMode()) "？" else "?")
+        }
+        btnSymExclamation.setOnClickListener {
+            triggerHapticFeedback()
+            commitSymbol(if (isTraditionalMode()) "！" else "!")
+        }
+        btnSymEllipsis.setOnClickListener {
+            triggerHapticFeedback()
+            commitSymbol(if (isTraditionalMode()) "……" else "...")
+        }
+        btnSymColon.setOnClickListener {
+            triggerHapticFeedback()
+            commitSymbol(if (isTraditionalMode()) "：" else ":")
+        }
+        btnSymAt.setOnClickListener {
+            triggerHapticFeedback()
+            commitSymbol(if (isTraditionalMode()) "＠" else "@")
+        }
+
+        val btnBackspace = root.findViewById<Button>(R.id.btn_backspace)
+        btnBackspace?.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    v.isPressed = true
+                    performBackspace()
+                    isRepeatingBackspace = true
+                    repeatHandler.postDelayed(backspaceRunnable, INITIAL_REPEAT_DELAY)
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.isPressed = false
+                    isRepeatingBackspace = false
+                    repeatHandler.removeCallbacks(backspaceRunnable)
+                    true
+                }
+                else -> false
+            }
+        }
+
+        root.findViewById<Button>(R.id.btn_clear)?.setOnClickListener {
+            triggerHapticFeedback()
+            engine.clear()
+            lastCommittedWord = null
+            resetT9MultiTap()
+            currentInputConnection?.setComposingText("", 1)
+            refreshUI(emptyList())
+        }
+    }
+
+    private fun isTraditionalMode(): Boolean {
+        return currentMode == KeyboardMode.ZHUYIN && !isSimplified
+    }
+
+    private fun updateSymbolsDisplay() {
+        if (::btnSymQuestion.isInitialized) {
+            val isTrad = isTraditionalMode()
+            btnSymQuestion.text = if (isTrad) "？" else "?"
+            btnSymExclamation.text = if (isTrad) "！" else "!"
+            btnSymEllipsis.text = if (isTrad) "……" else "..."
+            btnSymColon.text = if (isTrad) "：" else ":"
+            btnSymAt.text = if (isTrad) "＠" else "@"
+        }
+        if (::btnComma.isInitialized) {
+            btnComma.text = if (isTraditionalMode()) "，" else ","
+        }
+        if (::btnPeriod.isInitialized) {
+            btnPeriod.text = if (isTraditionalMode()) "。" else "."
+        }
+    }
+
+    private fun setupBottomActions(root: View) {
+        btnComma = root.findViewById(R.id.btn_comma)
+        btnPeriod = root.findViewById(R.id.btn_period)
+
+        btnMode123.setOnClickListener {
+            triggerHapticFeedback()
+            currentMode = if (currentMode == KeyboardMode.NUMBER_SYM) KeyboardMode.ZHUYIN else KeyboardMode.NUMBER_SYM
+            engine.clear()
+            lastCommittedWord = null
+            resetT9MultiTap()
+            currentInputConnection?.setComposingText("", 1)
+            refreshUI(emptyList())
+            updateKeyboardModeUI()
+        }
+
+        btnQwertyToggle.setOnClickListener {
+            triggerHapticFeedback()
+            if (currentMode == KeyboardMode.ENGLISH_QWERTY) {
+                currentMode = KeyboardMode.ENGLISH_T9
+            } else if (currentMode == KeyboardMode.ENGLISH_T9) {
+                currentMode = KeyboardMode.ENGLISH_QWERTY
+            } else {
+                currentMode = KeyboardMode.ENGLISH_QWERTY
+            }
+            engine.clear()
+            lastCommittedWord = null
+            resetT9MultiTap()
+            currentInputConnection?.setComposingText("", 1)
+            refreshUI(emptyList())
+            updateKeyboardModeUI()
+        }
+
+        btnLangToggle.setOnClickListener {
+            triggerHapticFeedback()
+            currentMode = when (currentMode) {
+                KeyboardMode.ZHUYIN, KeyboardMode.NUMBER_SYM -> KeyboardMode.ENGLISH_T9
+                KeyboardMode.ENGLISH_T9, KeyboardMode.ENGLISH_QWERTY -> KeyboardMode.ZHUYIN
+            }
+            engine.clear()
+            lastCommittedWord = null
+            resetT9MultiTap()
+            currentInputConnection?.setComposingText("", 1)
+            refreshUI(emptyList())
+            updateKeyboardModeUI()
+        }
+
+        btnSpaceSwipe.onTapListener = {
+            triggerHapticFeedback()
+            resetT9MultiTap()
+            if (engine.hasComposing()) {
+                val candidates = engine.getCandidates()
+                if (candidates.isNotEmpty()) {
+                    selectCandidate(candidates.first())
+                } else {
+                    val topWord = engine.getTopComposingWord()
+                    commitProcessedText(topWord)
+                    engine.clear()
+                    lastCommittedWord = topWord
+                    currentInputConnection?.setComposingText("", 1)
+                    showNextWordPredictions(topWord)
+                }
+            } else {
+                commitTextDirectly(" ")
+                lastCommittedWord = null
+            }
+        }
+
+        btnSpaceSwipe.onSwipeListener = { direction ->
+            triggerHapticFeedback()
+            if (direction == SwipeKeyButton.Direction.LEFT || direction == SwipeKeyButton.Direction.RIGHT) {
+                if (currentMode == KeyboardMode.ENGLISH_T9 || currentMode == KeyboardMode.ENGLISH_QWERTY) {
+                    // 英文模式下：滑動切換「大小寫」！
+                    isCapsLock = !isCapsLock
+                    btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
+                    updateKeyboardModeUI()
+                } else {
+                    // 中文模式下：滑動切換「繁 / 簡」！
+                    isSimplified = !isSimplified
+                    btnSpaceSwipe.text = if (isSimplified) "簡" else "繁"
+                    updateKeyboardModeUI()
+                    if (engine.hasComposing()) {
+                        refreshUI(engine.getCandidates())
+                    } else if (lastCommittedWord != null) {
+                        showNextWordPredictions(lastCommittedWord!!)
+                    }
+                }
+            }
+        }
+
+        // 逗點與句號 (繁體全形，簡體/英文半形)
+        btnComma.setOnClickListener {
+            triggerHapticFeedback()
+            resetT9MultiTap()
+            commitSymbol(if (isTraditionalMode()) "，" else ",")
+        }
+        btnPeriod.setOnClickListener {
+            triggerHapticFeedback()
+            resetT9MultiTap()
+            commitSymbol(if (isTraditionalMode()) "。" else ".")
+        }
+    }
+
+    private fun updateKeyboardModeUI() {
+        when (currentMode) {
+            KeyboardMode.ZHUYIN -> {
+                layout12Key.visibility = View.VISIBLE
+                layoutQwerty.visibility = View.GONE
+                btnMode123.text = "123"
+                btnLangToggle.text = "中"
+                btnSpaceSwipe.text = if (isSimplified) "簡" else "繁"
+                btnQwertyToggle.visibility = View.GONE
+                update12KeyLabelsZhuyin()
+            }
+            KeyboardMode.NUMBER_SYM -> {
+                layout12Key.visibility = View.VISIBLE
+                layoutQwerty.visibility = View.GONE
+                btnMode123.text = "注音"
+                btnLangToggle.text = "中"
+                btnSpaceSwipe.text = "空格"
+                btnQwertyToggle.visibility = View.GONE
+                update12KeyLabelsNumbers()
+            }
+            KeyboardMode.ENGLISH_T9 -> {
+                layout12Key.visibility = View.VISIBLE
+                layoutQwerty.visibility = View.GONE
+                btnMode123.text = "123"
+                btnLangToggle.text = "EN"
+                btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
+                btnQwertyToggle.visibility = View.VISIBLE
+                btnQwertyToggle.text = "26鍵"
+                update12KeyLabelsT9English()
+            }
+            KeyboardMode.ENGLISH_QWERTY -> {
+                layout12Key.visibility = View.GONE
+                layoutQwerty.visibility = View.VISIBLE
+                btnMode123.text = "123"
+                btnLangToggle.text = "EN"
+                btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
+                btnQwertyToggle.visibility = View.VISIBLE
+                btnQwertyToggle.text = "9鍵"
+                updateQwertyKeysText()
+            }
+        }
+        updateSymbolsDisplay()
+    }
+
+    private fun update12KeyLabelsZhuyin() {
+        set12KeyText(1, "ㄅ ㄉ ㄚ")
+        set12KeyText(2, "ㄍ ㄐ ㄞ")
+        set12KeyText(3, "ㄓ ㄗ ㄢ ㄦ")
+        set12KeyText(4, "ㄆ ㄊ ㄛ")
+        set12KeyText(5, "ㄎ ㄑ ㄟ")
+        set12KeyText(6, "ㄔ ㄘ ㄣ ㄧ")
+        set12KeyText(7, "ㄇ ㄋ ㄜ")
+        set12KeyText(8, "ㄏ ㄒ ㄠ ㄡ")
+        set12KeyText(9, "ㄕ ㄙ ㄤ ㄨ")
+        set12KeyText(10, "ㄈ ㄌ ㄝ")
+        set12KeyText(11, "ˇ ˋ ˊ ˙")
+        set12KeyText(12, "ㄖ ㄥ ㄩ")
+    }
+
+    private fun update12KeyLabelsNumbers() {
+        set12KeyText(1, "1")
+        set12KeyText(2, "2")
+        set12KeyText(3, "3")
+        set12KeyText(4, "4")
+        set12KeyText(5, "5")
+        set12KeyText(6, "6")
+        set12KeyText(7, "7")
+        set12KeyText(8, "8")
+        set12KeyText(9, "9")
+        set12KeyText(10, "*")
+        set12KeyText(11, "0")
+        set12KeyText(12, "#")
+    }
+
+    private fun update12KeyLabelsT9English() {
+        val caseTransform = { s: String -> if (isCapsLock) s.uppercase() else s.lowercase() }
+        set12KeyText(1, "@ . _ 1")
+        set12KeyText(2, caseTransform("A B C 2"))
+        set12KeyText(3, caseTransform("D E F 3"))
+        set12KeyText(4, caseTransform("G H I 4"))
+        set12KeyText(5, caseTransform("J K L 5"))
+        set12KeyText(6, caseTransform("M N O 6"))
+        set12KeyText(7, caseTransform("P Q R S 7"))
+        set12KeyText(8, caseTransform("T U V 8"))
+        set12KeyText(9, caseTransform("W X Y Z 9"))
+        set12KeyText(10, "- + *")
+        set12KeyText(11, "/ = 0")
+        set12KeyText(12, "% & #")
+    }
+
+    private fun set12KeyText(keyNum: Int, text: String) {
+        val root = layout12Key
+        val viewId = when (keyNum) {
+            1 -> R.id.key_k1; 2 -> R.id.key_k2; 3 -> R.id.key_k3
+            4 -> R.id.key_k4; 5 -> R.id.key_k5; 6 -> R.id.key_k6
+            7 -> R.id.key_k7; 8 -> R.id.key_k8; 9 -> R.id.key_k9
+            10 -> R.id.key_k10; 11 -> R.id.key_k11; 12 -> R.id.key_k12
+            else -> return
+        }
+        root.findViewById<SwipeKeyButton>(viewId)?.text = text
+    }
+
+    private fun getNumberChar(keyNum: Int): String {
+        return when (keyNum) {
+            1 -> "1"; 2 -> "2"; 3 -> "3"
+            4 -> "4"; 5 -> "5"; 6 -> "6"
+            7 -> "7"; 8 -> "8"; 9 -> "9"
+            10 -> "*"; 11 -> "0"; 12 -> "#"
+            else -> ""
+        }
+    }
+
+    private fun getT9EnglishSwipe(keyNum: Int, dir: SwipeKeyButton.Direction): Char? {
+        return when (keyNum) {
+            2 -> when (dir) { SwipeKeyButton.Direction.LEFT -> 'a'; SwipeKeyButton.Direction.DOWN -> 'b'; SwipeKeyButton.Direction.RIGHT -> 'c'; else -> null }
+            3 -> when (dir) { SwipeKeyButton.Direction.LEFT -> 'd'; SwipeKeyButton.Direction.DOWN -> 'e'; SwipeKeyButton.Direction.RIGHT -> 'f'; else -> null }
+            4 -> when (dir) { SwipeKeyButton.Direction.LEFT -> 'g'; SwipeKeyButton.Direction.DOWN -> 'h'; SwipeKeyButton.Direction.RIGHT -> 'i'; else -> null }
+            5 -> when (dir) { SwipeKeyButton.Direction.LEFT -> 'j'; SwipeKeyButton.Direction.DOWN -> 'k'; SwipeKeyButton.Direction.RIGHT -> 'l'; else -> null }
+            6 -> when (dir) { SwipeKeyButton.Direction.LEFT -> 'm'; SwipeKeyButton.Direction.DOWN -> 'n'; SwipeKeyButton.Direction.RIGHT -> 'o'; else -> null }
+            7 -> when (dir) { SwipeKeyButton.Direction.LEFT -> 'p'; SwipeKeyButton.Direction.DOWN -> 'q'; SwipeKeyButton.Direction.RIGHT -> 'r'; SwipeKeyButton.Direction.UP -> 's' }
+            8 -> when (dir) { SwipeKeyButton.Direction.LEFT -> 't'; SwipeKeyButton.Direction.DOWN -> 'u'; SwipeKeyButton.Direction.RIGHT -> 'v'; else -> null }
+            9 -> when (dir) { SwipeKeyButton.Direction.LEFT -> 'w'; SwipeKeyButton.Direction.DOWN -> 'x'; SwipeKeyButton.Direction.RIGHT -> 'y'; SwipeKeyButton.Direction.UP -> 'z' }
+            else -> null
+        }
+    }
+
+    private fun getSwipeZhuyin(keyId: Int, direction: SwipeKeyButton.Direction): Char? {
+        return when (keyId) {
+            1 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄅ'; SwipeKeyButton.Direction.DOWN -> 'ㄉ'; SwipeKeyButton.Direction.RIGHT -> 'ㄚ'; else -> null }
+            2 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄍ'; SwipeKeyButton.Direction.DOWN -> 'ㄐ'; SwipeKeyButton.Direction.RIGHT -> 'ㄞ'; else -> null }
+            3 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄓ'; SwipeKeyButton.Direction.DOWN -> 'ㄗ'; SwipeKeyButton.Direction.RIGHT -> 'ㄢ'; SwipeKeyButton.Direction.UP -> 'ㄦ' }
+            4 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄆ'; SwipeKeyButton.Direction.DOWN -> 'ㄊ'; SwipeKeyButton.Direction.RIGHT -> 'ㄛ'; else -> null }
+            5 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄎ'; SwipeKeyButton.Direction.DOWN -> 'ㄑ'; SwipeKeyButton.Direction.RIGHT -> 'ㄟ'; else -> null }
+            6 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄔ'; SwipeKeyButton.Direction.DOWN -> 'ㄘ'; SwipeKeyButton.Direction.RIGHT -> 'ㄣ'; SwipeKeyButton.Direction.UP -> 'ㄧ' }
+            7 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄇ'; SwipeKeyButton.Direction.DOWN -> 'ㄋ'; SwipeKeyButton.Direction.RIGHT -> 'ㄜ'; else -> null }
+            8 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄏ'; SwipeKeyButton.Direction.DOWN -> 'ㄒ'; SwipeKeyButton.Direction.RIGHT -> 'ㄠ'; SwipeKeyButton.Direction.UP -> 'ㄡ' }
+            9 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄕ'; SwipeKeyButton.Direction.DOWN -> 'ㄙ'; SwipeKeyButton.Direction.RIGHT -> 'ㄤ'; SwipeKeyButton.Direction.UP -> 'ㄨ' }
+            10 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄈ'; SwipeKeyButton.Direction.DOWN -> 'ㄌ'; SwipeKeyButton.Direction.RIGHT -> 'ㄝ'; else -> null }
+            12 -> when (direction) { SwipeKeyButton.Direction.LEFT -> 'ㄖ'; SwipeKeyButton.Direction.DOWN -> 'ㄥ'; SwipeKeyButton.Direction.RIGHT -> 'ㄩ'; else -> null }
+            else -> null
+        }
+    }
+
+    private fun performBackspace() {
+        triggerHapticFeedback()
+        resetT9MultiTap()
+        if (engine.hasComposing()) {
+            val candidates = engine.backspace()
+            refreshUI(candidates)
+        } else {
+            currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+            lastCommittedWord = null
+            showNextWordPredictions("")
+        }
+    }
+
+    private fun commitSymbol(text: String) {
+        resetT9MultiTap()
+        if (engine.hasComposing()) {
+            engine.clear()
+            currentInputConnection?.setComposingText("", 1)
+        }
+        currentInputConnection?.commitText(text, 1)
+        lastCommittedWord = null
+        showNextWordPredictions("")
+    }
+
+    private fun commitTextDirectly(text: String) {
+        currentInputConnection?.commitText(text, 1)
+        lastCommittedWord = null
+        showNextWordPredictions("")
+    }
+
+    private fun commitProcessedText(text: String) {
+        val finalText = if (isSimplified) ChineseConverter.toSimplified(text) else text
+        currentInputConnection?.commitText(finalText, 1)
+    }
+
+    private fun refreshUI(candidates: List<DictEntry>) {
+        updateComposingPreview()
+        updateCandidateBar(candidates)
+        updateLeftZhuyinCombos()
+    }
+
+    private fun updateComposingPreview() {
+        if (!engine.hasComposing()) {
+            currentInputConnection?.setComposingText("", 1)
+            return
+        }
+        val previewWord = engine.getTopComposingWord()
+        val finalPreview = if (isSimplified) ChineseConverter.toSimplified(previewWord) else previewWord
+        currentInputConnection?.setComposingText(finalPreview, 1)
+    }
+
+    private fun updateLeftZhuyinCombos() {
+        if (!engine.hasComposing() || currentMode != KeyboardMode.ZHUYIN) {
+            layoutSymbols.visibility = View.VISIBLE
+            scrollZhuyinCombos.visibility = View.GONE
+            containerZhuyinCombos.removeAllViews()
+            return
+        }
+
+        layoutSymbols.visibility = View.GONE
+        scrollZhuyinCombos.visibility = View.VISIBLE
+        containerZhuyinCombos.removeAllViews()
+
+        val combos = engine.getPossibleZhuyinCombinations()
+        val density = resources.displayMetrics.density
+        val btnHeightPx = (50 * density).toInt()
+
+        for (combo in combos) {
+            val btn = Button(this).apply {
+                text = combo
+                textSize = 15f
+                setTextColor(Color.parseColor("#E65100"))
+                setBackgroundResource(R.drawable.bg_zhuyin_combo)
+                gravity = Gravity.CENTER
+                val params = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    btnHeightPx
+                ).apply {
+                    setMargins(2, 2, 2, 2)
+                }
+                layoutParams = params
+                setOnClickListener {
+                    triggerHapticFeedback()
+                    val filtered = engine.selectZhuyinCombo(combo)
+                    updateCandidateBar(filtered)
+                    updateComposingPreview()
+                }
+            }
+            containerZhuyinCombos.addView(btn)
+        }
+    }
+
+    private fun updateCandidateBar(candidates: List<DictEntry>) {
+        candidateContainer.removeAllViews()
+
+        if (candidates.isEmpty()) {
+            return
+        }
+
+        for ((index, entry) in candidates.take(30).withIndex()) {
+            val displayWord = if (isSimplified) ChineseConverter.toSimplified(entry.word) else entry.word
+            val tv = TextView(this).apply {
+                text = displayWord
+                textSize = 20f
+                setPadding(32, 16, 32, 16)
+                setTextColor(
+                    if (index == 0) ContextCompat.getColor(context, R.color.kb_candidate_text)
+                    else ContextCompat.getColor(context, R.color.kb_text_primary)
+                )
+                setOnClickListener {
+                    triggerHapticFeedback()
+                    selectCandidate(entry)
+                }
+            }
+            candidateContainer.addView(tv)
+        }
+    }
+
+    private fun showNextWordPredictions(word: String) {
+        if (word.isEmpty()) {
+            candidateContainer.removeAllViews()
+            return
+        }
+        val predictions = engine.getNextWordPredictions(word)
+        if (predictions.isNotEmpty()) {
+            updateCandidateBar(predictions)
+        } else {
+            candidateContainer.removeAllViews()
+        }
+    }
+
+    private fun selectCandidate(entry: DictEntry) {
+        commitProcessedText(entry.word)
+        lastCommittedWord = entry.word
+        engine.clear()
+        currentInputConnection?.setComposingText("", 1)
+        updateLeftZhuyinCombos()
+        showNextWordPredictions(entry.word)
+    }
+}
