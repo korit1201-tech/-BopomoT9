@@ -25,11 +25,27 @@
             android:paddingEnd="8dp" />
     </HorizontalScrollView>
 
+    <!-- 鍵盤高度拉伸調整把手 (拖動可上下縮放高度) -->
+    <FrameLayout
+        android:id="@+id/layout_resize_handle"
+        android:layout_width="match_parent"
+        android:layout_height="16dp"
+        android:clickable="true"
+        android:focusable="true">
+
+        <View
+            android:layout_width="48dp"
+            android:layout_height="4dp"
+            android:layout_gravity="center"
+            android:background="@drawable/bg_resize_pill" />
+    </FrameLayout>
+
     <!-- 主鍵盤區容器 -->
     <FrameLayout
+        android:id="@+id/layout_main_frame"
         android:layout_width="match_parent"
-        android:layout_height="220dp"
-        android:layout_marginTop="4dp">
+        android:layout_height="240dp"
+        android:layout_marginTop="2dp">
 
         <!-- 1. 12 宮格佈局 (注音 / 數字 / 9鍵英文 共享) -->
         <LinearLayout

@@ -1,93 +1,287 @@
 package com.bopomofo.t9ime.engine
 
+import android.content.Context
 import com.bopomofo.t9ime.ui.HandwritingCanvasView
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
+import kotlin.math.log10
+import kotlin.math.max
+import kotlin.math.min
 
 /**
- * 輕量純本地幾何筆畫手寫識別引擎
- * 提取筆畫特徵（起終點、方向夾角、曲率、交點、筆畫數）並比對核心字庫
+ * 高精度離線手寫辨識引擎
+ * 基於標準筆畫特徵提取（橫1、豎2、撇3、捺點4、折5）、幾何轉折角分析、字元封閉環形檢測，
+ * 並結合 8000+ 常用繁體中文字筆順庫進行動態 Levenshtein 編輯距離比對與頻率加權。
  */
-class OfflineHandwritingRecognizer(private val dictEntries: List<DictEntry>) {
+class OfflineHandwritingRecognizer(context: Context) {
 
-    // 常用單字筆畫數統計表（涵蓋高頻繁體中文字）
-    private val strokeCharMap = mapOf(
-        1 to listOf("一", "乙", "1"),
-        2 to listOf("二", "十", "人", "入", "八", "七", "卜", "刀", "力", "又", "丁", "了", "2"),
-        3 to listOf("三", "口", "山", "大", "小", "上", "下", "工", "子", "女", "土", "已", "寸", "弓", "夕", "凡", "3"),
-        4 to listOf("四", "中", "天", "日", "月", "木", "水", "火", "心", "不", "手", "文", "方", "王", "井", "太", "友", "分", "化", "牛", "毛", "今", "反", "引", "少", "4"),
-        5 to listOf("五", "生", "正", "出", "立", "主", "目", "白", "田", "世", "本", "石", "左", "右", "平", "打", "北", "半", "民", "加", "皮", "示", "兄", "外", "市", "包", "5"),
-        6 to listOf("六", "有", "同", "全", "多", "行", "年", "自", "回", "百", "米", "地", "成", "先", "光", "名", "合", "安", "共", "老", "好", "西", "西", "字", "考", "6"),
-        7 to listOf("七", "我", "你", "作", "位", "李", "身", "車", "長", "走", "見", "言", "告", "何", "每", "別", "利", "局", "弟", "角", "完", "希", "兵", "求", "7"),
-        8 to listOf("八", "的", "來", "到", "定", "事", "取", "東", "明", "金", "門", "物", "知", "受", "青", "非", "其", "直", "命", "或", "夜", "表", "始", "果", "店", "8"),
-        9 to listOf("九", "南", "面", "信", "重", "軍", "前", "便", "思", "春", "點", "音", "風", "段", "看", "保", "政", "星", "建", "活", "律", "孩", "要", "食", "9"),
-        10 to listOf("十", "個", "特", "高", "校", "原", "家", "師", "息", "根", "氣", "馬", "展", "留", "真", "笑", "書", "記", "問", "做", "能", "連", "旅", "通", "0"),
-        11 to listOf("得", "張", "問", "動", "票", "球", "現", "產", "帶", "國", "眼", "接", "常", "許", "專", "清", "排", "訪", "停", "野", "第"),
-        12 to listOf("這", "最", "開", "發", "間", "報", "集", "著", "道", "買", "無", "畫", "創", "提", "喜", "短", "程", "森", "費", "街"),
-        13 to listOf("經", "電", "義", "意", "會", "話", "路", "新", "當", "感", "試", "業", "運", "準", "想", "話", "溫", "裝", "詩"),
-        14 to listOf("實", "寫", "認", "聞", "管", "遠", "語", "算", "種", "綠", "說", "對", "領", "網", "察", "維", "漢", "端"),
-        15 to listOf("請", "學", "論", "課", "線", "熱", "寫", "標", "機", "選", "數", "樣", "談", "質", "調", "趣", "廣", "確"),
-        16 to listOf("錢", "辦", "整", "歷", "頭", "機", "獨", "憲", "鋼", "錦", "隨", "興", "龍", "導", "親", "戰", "橋"),
-        17 to listOf("聲", "謝", "優", "總", "應", "點", "講", "聯", "營", "繁", "簡", "聰", "遠", "戲", "購"),
-        18 to listOf("關", "轉", "醫", "題", "豐", "舊", "簡", "雙", "觀", "禮", "織", "難"),
-        19 to listOf("識", "邊", "壞", "願", "關", "警", "贊", "證", "麗", "寶"),
-        20 to listOf("鐘", "議", "覺", "黨", "競", "魔", "寶", "護", "嚴")
-    )
+    data class StrokeEntry(val char: String, val code: String, val freq: Long)
 
+    // 依筆畫數分組索引：strokeCount -> List<StrokeEntry>
+    private val strokeIndex = mutableMapOf<Int, MutableList<StrokeEntry>>()
+    private val allEntries = mutableListOf<StrokeEntry>()
+
+    init {
+        loadStrokeDatabase(context)
+    }
+
+    private fun loadStrokeDatabase(context: Context) {
+        try {
+            context.assets.open("handwriting_strokes.txt").use { inputStream ->
+                BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).useLines { lines ->
+                    for (line in lines) {
+                        val trimmed = line.trim()
+                        if (trimmed.isEmpty()) continue
+                        val parts = trimmed.split("\t")
+                        if (parts.size >= 2) {
+                            val ch = parts[0]
+                            val code = parts[1]
+                            val freq = if (parts.size >= 3) parts[2].toLongOrNull() ?: 100L else 100L
+                            val entry = StrokeEntry(ch, code, freq)
+                            allEntries.add(entry)
+
+                            val count = code.length
+                            val list = strokeIndex.getOrPut(count) { mutableListOf() }
+                            list.add(entry)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * 辨識筆畫軌跡，回傳候選字列表
+     */
     fun recognize(strokes: List<List<HandwritingCanvasView.StrokePoint>>): List<DictEntry> {
-        val count = strokes.size
-        if (count == 0) return emptyList()
+        if (strokes.isEmpty()) return emptyList()
 
         val results = mutableListOf<DictEntry>()
-        val directChars = strokeCharMap[count] ?: emptyList()
-        val adjacentChars = (strokeCharMap[count - 1] ?: emptyList()) + (strokeCharMap[count + 1] ?: emptyList())
+        val count = strokes.size
 
-        // 結合幾何筆劃方向判斷（水平、垂直、撇捺）
-        val isHorizontal = isMainlyHorizontal(strokes)
-        val isVertical = isMainlyVertical(strokes)
-
+        // 1. 特殊單筆或雙筆形狀檢測（數字、符號、極簡字）
         if (count == 1) {
-            if (isHorizontal) return listOf(DictEntry("一", "ㄧ", 100000), DictEntry("1", "", 90000), DictEntry("乙", "ㄧˇ", 80000))
-            if (isVertical) return listOf(DictEntry("丨", "ㄍㄨㄣˇ", 100000), DictEntry("1", "", 90000), DictEntry("十", "ㄕˊ", 80000))
+            val s = strokes.first()
+            if (isClosedLoop(s)) {
+                return listOf(
+                    DictEntry("0", "", 200000),
+                    DictEntry("O", "", 190000),
+                    DictEntry("o", "", 180000),
+                    DictEntry("口", "ㄎㄡˇ", 170000)
+                )
+            }
+            val code = classifySingleStroke(s)
+            if (code == '1') {
+                return listOf(
+                    DictEntry("一", "ㄧ", 200000),
+                    DictEntry("1", "", 180000),
+                    DictEntry("乙", "ㄧˇ", 160000),
+                    DictEntry("-", "", 150000)
+                )
+            } else if (code == '2') {
+                return listOf(
+                    DictEntry("1", "", 200000),
+                    DictEntry("丨", "ㄍㄨㄣˇ", 180000),
+                    DictEntry("十", "ㄕˊ", 150000),
+                    DictEntry("l", "", 140000)
+                )
+            } else if (code == '5') {
+                return listOf(
+                    DictEntry("乙", "ㄧˇ", 200000),
+                    DictEntry("7", "", 190000),
+                    DictEntry("2", "", 180000),
+                    DictEntry("C", "", 170000),
+                    DictEntry("L", "", 160000)
+                )
+            }
         }
 
-        if (count == 2) {
-            if (isHorizontal) return listOf(DictEntry("二", "ㄦˋ", 100000), DictEntry("十", "ㄕˊ", 90000), DictEntry("人", "ㄖㄣˊ", 85000), DictEntry("入", "ㄖㄨˋ", 80000), DictEntry("八", "ㄅㄚ", 75000))
+        // 2. 提取整體筆畫代碼字串（1~5）
+        val userStrokeCode = StringBuilder()
+        for (stroke in strokes) {
+            userStrokeCode.append(classifySingleStroke(stroke))
+        }
+        val userCode = userStrokeCode.toString()
+
+        // 3. 搜尋筆畫數鄰近的候選字庫 (count - 1, count, count + 1, count + 2)
+        val searchCounts = mutableListOf(count)
+        if (count > 1) searchCounts.add(count - 1)
+        searchCounts.add(count + 1)
+        if (count > 2) searchCounts.add(count - 2)
+        searchCounts.add(count + 2)
+
+        data class ScoredCandidate(val char: String, val score: Double)
+        val candidates = mutableListOf<ScoredCandidate>()
+        val seenChars = mutableSetOf<String>()
+
+        for (cnt in searchCounts) {
+            val entries = strokeIndex[cnt] ?: continue
+            for (entry in entries) {
+                if (entry.char in seenChars) continue
+
+                val dist = levenshtein(userCode, entry.code)
+                val maxLen = max(userCode.length, entry.code.length)
+                val similarity = 1.0 - (dist.toDouble() / maxLen.toDouble())
+
+                // 相似度大於 0.45 視為合格候選
+                if (similarity >= 0.45) {
+                    val exactBonus = if (dist == 0) 250000.0 else 0.0
+                    val countBonus = if (cnt == count) 30000.0 else 0.0
+                    val freqWeight = log10(max(10.0, entry.freq.toDouble())) * 4000.0
+                    val finalScore = (similarity * 150000.0) + exactBonus + countBonus + freqWeight
+
+                    candidates.add(ScoredCandidate(entry.char, finalScore))
+                    seenChars.add(entry.char)
+                }
+            }
         }
 
-        if (count == 3) {
-            return listOf(DictEntry("三", "ㄙㄢ", 100000), DictEntry("口", "ㄎㄡˇ", 95000), DictEntry("山", "ㄕㄢ", 90000), DictEntry("大", "ㄉㄚˋ", 85000), DictEntry("小", "ㄒㄧㄠˇ", 80000), DictEntry("工", "ㄍㄨㄥ", 75000))
+        // 4. 排序並生成最終結果
+        candidates.sortByDescending { it.score }
+        for (cand in candidates.take(25)) {
+            results.add(DictEntry(cand.char, "", cand.score.toInt()))
         }
 
-        if (count == 4) {
-            return listOf(DictEntry("四", "ㄙˋ", 100000), DictEntry("中", "ㄓㄨㄥ", 95000), DictEntry("天", "ㄊㄧㄢ", 90000), DictEntry("日", "ㄖˋ", 85000), DictEntry("月", "ㄩㄝˋ", 80000), DictEntry("木", "ㄇㄨˋ", 75000), DictEntry("水", "ㄕㄨㄟˇ", 70000))
-        }
-
-        // 高筆畫數：從常用庫匹配
-        val candidates = directChars.take(8) + adjacentChars.take(4)
-        for (c in candidates) {
-            results.add(DictEntry(c, "", 50000))
+        // 5. 若比對結果過少，兜底補入常見筆畫數單字
+        if (results.size < 5) {
+            val fallbackEntries = strokeIndex[count] ?: emptyList()
+            for (fb in fallbackEntries.take(10)) {
+                if (fb.char !in seenChars) {
+                    results.add(DictEntry(fb.char, "", 10000))
+                    seenChars.add(fb.char)
+                }
+            }
         }
 
         return results
     }
 
-    private fun isMainlyHorizontal(strokes: List<List<HandwritingCanvasView.StrokePoint>>): Boolean {
-        if (strokes.isEmpty()) return false
-        val s = strokes.first()
-        if (s.size < 2) return false
-        val dx = abs(s.last().x - s.first().x)
-        val dy = abs(s.last().y - s.first().y)
-        return dx > dy * 1.5
+    /**
+     * 單筆畫幾何分類：
+     * 1: 橫 (含提)
+     * 2: 豎 (含豎鉤)
+     * 3: 撇
+     * 4: 捺、點
+     * 5: 折 (轉折筆畫)
+     */
+    private fun classifySingleStroke(pts: List<HandwritingCanvasView.StrokePoint>): Char {
+        if (pts.size < 2) return '4' // 點
+
+        var arcLength = 0.0
+        for (i in 0 until pts.size - 1) {
+            arcLength += hypot((pts[i + 1].x - pts[i].x).toDouble(), (pts[i + 1].y - pts[i].y).toDouble())
+        }
+        if (arcLength < 22.0) return '4' // 極短筆畫為點
+
+        val p0 = pts.first()
+        val pk = pts.last()
+        val disp = hypot((pk.x - p0.x).toDouble(), (pk.y - p0.y).toDouble())
+
+        // 1. 檢測最大直線偏移距離 (Max perpendicular deviation)
+        val lineA = (pk.y - p0.y).toDouble()
+        val lineB = -(pk.x - p0.x).toDouble()
+        val lineC = (pk.x * p0.y - pk.y * p0.x).toDouble()
+        val denom = hypot(lineA, lineB)
+        var maxDev = 0.0
+        if (denom > 1e-4) {
+            for (p in pts) {
+                val d = abs(lineA * p.x + lineB * p.y + lineC) / denom
+                if (d > maxDev) maxDev = d
+            }
+        }
+
+        // 2. 檢測前段與後段角度變化 (Corner / Turn detection)
+        val n = pts.size
+        val pThird1 = pts[max(1, n / 3)]
+        val pThird2 = pts[min(n - 2, (2 * n) / 3)]
+        val ang1 = Math.toDegrees(atan2((pThird1.y - p0.y).toDouble(), (pThird1.x - p0.x).toDouble()))
+        val ang2 = Math.toDegrees(atan2((pk.y - pThird2.y).toDouble(), (pk.x - pThird2.x).toDouble()))
+        val angleDiff = abs((ang1 - ang2 + 180.0) % 360.0 - 180.0)
+
+        val devRatio = maxDev / arcLength
+        val dispRatio = disp / arcLength
+
+        // 顯著折角判定
+        if (angleDiff > 45.0 || (dispRatio < 0.78 && devRatio > 0.18)) {
+            return '5' // 折
+        }
+
+        // 3. 直線筆畫方向判定
+        val overallAngle = Math.toDegrees(atan2((pk.y - p0.y).toDouble(), (pk.x - p0.x).toDouble()))
+
+        return when {
+            overallAngle in -35.0..35.0 -> '1'  // 橫
+            overallAngle in -75.0..-35.0 -> '1' // 提
+            overallAngle in 60.0..120.0 -> '2'  // 豎
+            overallAngle in 120.0..175.0 -> '3' // 撇 (向左下)
+            overallAngle in 35.0..60.0 -> '4'   // 捺 (向右下)
+            overallAngle < -120.0 || overallAngle > 175.0 -> '3' // 向左/左下撇
+            else -> '1'
+        }
     }
 
-    private fun isMainlyVertical(strokes: List<List<HandwritingCanvasView.StrokePoint>>): Boolean {
-        if (strokes.isEmpty()) return false
-        val s = strokes.first()
-        if (s.size < 2) return false
-        val dx = abs(s.last().x - s.first().x)
-        val dy = abs(s.last().y - s.first().y)
-        return dy > dx * 1.5
+    /**
+     * 檢測筆畫是否為封閉環（如 0, O, o, 口等）
+     */
+    private fun isClosedLoop(pts: List<HandwritingCanvasView.StrokePoint>): Boolean {
+        if (pts.size < 6) return false
+        var arcLen = 0.0
+        var minX = Float.MAX_VALUE
+        var maxX = Float.MIN_VALUE
+        var minY = Float.MAX_VALUE
+        var maxY = Float.MIN_VALUE
+
+        for (i in pts.indices) {
+            val p = pts[i]
+            if (p.x < minX) minX = p.x
+            if (p.x > maxX) maxX = p.x
+            if (p.y < minY) minY = p.y
+            if (p.y > maxY) maxY = p.y
+            if (i < pts.size - 1) {
+                arcLen += hypot((pts[i + 1].x - p.x).toDouble(), (pts[i + 1].y - p.y).toDouble())
+            }
+        }
+
+        val width = maxX - minX
+        val height = maxY - minY
+        val p0 = pts.first()
+        val pk = pts.last()
+        val endDist = hypot((pk.x - p0.x).toDouble(), (pk.y - p0.y).toDouble())
+
+        // 起點與終點距離接近，且包圍盒有一定寬高，且軌跡長度大於包圍盒周長的一半
+        return (endDist < max(width, height) * 0.35f) && (width > 25f && height > 25f) && (arcLen > (width + height))
+    }
+
+    /**
+     * Levenshtein 編輯距離計算
+     */
+    private fun levenshtein(s1: String, s2: String): Int {
+        if (s1 == s2) return 0
+        if (s1.isEmpty()) return s2.length
+        if (s2.isEmpty()) return s1.length
+
+        var prev = IntArray(s2.length + 1) { it }
+        var curr = IntArray(s2.length + 1)
+
+        for (i in s1.indices) {
+            curr[0] = i + 1
+            val c1 = s1[i]
+            for (j in s2.indices) {
+                val cost = if (c1 == s2[j]) 0 else 1
+                curr[j + 1] = min(
+                    min(curr[j] + 1, prev[j + 1] + 1),
+                    prev[j] + cost
+                )
+            }
+            val temp = prev
+            prev = curr
+            curr = temp
+        }
+        return prev[s2.length]
     }
 }

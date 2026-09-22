@@ -70,6 +70,8 @@ class ZhuyinInputMethodService : InputMethodService() {
     private lateinit var layout12Key: LinearLayout
     private lateinit var layoutQwerty: LinearLayout
     private lateinit var layoutHandwriting: FrameLayout
+    private lateinit var layoutMainFrame: FrameLayout
+    private lateinit var layoutResizeHandle: FrameLayout
     private lateinit var handwritingCanvas: com.bopomofo.t9ime.ui.HandwritingCanvasView
     private var handwritingRecognizer: com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer? = null
 
@@ -154,11 +156,50 @@ class ZhuyinInputMethodService : InputMethodService() {
         layout12Key = root.findViewById(R.id.layout_12key)
         layoutQwerty = root.findViewById(R.id.layout_qwerty)
         layoutHandwriting = root.findViewById(R.id.layout_handwriting)
+        layoutMainFrame = root.findViewById(R.id.layout_main_frame)
+        layoutResizeHandle = root.findViewById(R.id.layout_resize_handle)
         handwritingCanvas = root.findViewById(R.id.handwriting_canvas)
+
+        // 鍵盤高度拉伸調整（支援上下拖動自由縮放大小，預設 240dp）
+        val prefs = getSharedPreferences("ime_prefs", Context.MODE_PRIVATE)
+        val savedHeightDp = prefs.getInt("pref_keyboard_height_dp", 240)
+        val density = resources.displayMetrics.density
+        layoutMainFrame.layoutParams.height = (savedHeightDp * density).toInt()
+
+        var startY = 0f
+        var startHeight = 0
+        layoutResizeHandle.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startY = event.rawY
+                    startHeight = layoutMainFrame.height
+                    triggerHapticFeedback()
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val deltaY = startY - event.rawY // 向上拉 deltaY > 0 -> 高度放大
+                    val minHeightPx = (180 * density).toInt()
+                    val maxHeightPx = (380 * density).toInt()
+                    val newHeight = (startHeight + deltaY).toInt().coerceIn(minHeightPx, maxHeightPx)
+                    if (layoutMainFrame.height != newHeight) {
+                        layoutMainFrame.layoutParams.height = newHeight
+                        layoutMainFrame.requestLayout()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val finalDp = (layoutMainFrame.height / density).toInt()
+                    prefs.edit().putInt("pref_keyboard_height_dp", finalDp).apply()
+                    triggerHapticFeedback()
+                    true
+                }
+                else -> false
+            }
+        }
 
         handwritingCanvas.onRecognizeListener = { strokes ->
             if (handwritingRecognizer == null) {
-                handwritingRecognizer = com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer(emptyList())
+                handwritingRecognizer = com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer(applicationContext)
             }
             val candidates = handwritingRecognizer?.recognize(strokes) ?: emptyList()
             if (candidates.isNotEmpty()) {
@@ -236,14 +277,39 @@ class ZhuyinInputMethodService : InputMethodService() {
                 }
             }
 
-            // 長按精確選擇注音符號 (Long-press Exact Selection)
+            // 長按精確選擇注音符號 / 9鍵英文字母 (Long-press Exact Selection)
             btn.onLongClickListenerCustom = {
                 triggerHapticFeedback()
                 if (currentMode == KeyboardMode.ZHUYIN) {
                     showZhuyinKeyPopup(btn, keyNum)
+                } else if (currentMode == KeyboardMode.ENGLISH_T9) {
+                    showEnglishKeyPopup(btn, keyNum)
                 }
             }
         }
+    }
+
+    /**
+     * 9 鍵英文長按彈出該鍵所屬字母/數字選單（所選即所得）
+     */
+    private fun showEnglishKeyPopup(anchor: View, keyNum: Int) {
+        val chars = getT9CharsForKey(keyNum)
+        if (chars.isEmpty()) return
+
+        val popup = android.widget.PopupMenu(this, anchor)
+        for ((index, ch) in chars.withIndex()) {
+            val displayChar = if (isCapsLock && ch.isLetter()) ch.uppercaseChar() else ch
+            popup.menu.add(0, index, index, displayChar.toString())
+        }
+        popup.setOnMenuItemClickListener { item ->
+            triggerHapticFeedback()
+            val selectedChar = chars[item.itemId]
+            val finalChar = if (isCapsLock && selectedChar.isLetter()) selectedChar.uppercaseChar() else selectedChar
+            commitTextDirectly(finalChar.toString())
+            resetT9MultiTap()
+            true
+        }
+        popup.show()
     }
 
     /**
