@@ -43,7 +43,11 @@ class SwipeKeyButton @JvmOverloads constructor(
     private var isMoved = false
     private var activeDirection: Direction? = null
 
-    private val SWIPE_THRESHOLD_DP = 16f
+    companion object {
+        private const val SWIPE_THRESHOLD_DP = 26f
+        private const val SHOW_POPUP_DELAY_MS = 220L
+    }
+
     private val swipeThresholdPx: Float
         get() = SWIPE_THRESHOLD_DP * resources.displayMetrics.density
 
@@ -111,7 +115,7 @@ class SwipeKeyButton @JvmOverloads constructor(
                 view.scaleY = 0.85f
                 view.alpha = 0f
                 popup.showAtLocation(this, Gravity.NO_GRAVITY, xOff, yOff)
-                view.animate().scaleX(1.0f).scaleY(1.0f).alpha(1.0f).setDuration(120).start()
+                view.animate().scaleX(1.0f).scaleY(1.0f).alpha(1.0f).setDuration(100).start()
             }
         } catch (_: Exception) {
         }
@@ -168,25 +172,14 @@ class SwipeKeyButton @JvmOverloads constructor(
         reset(tvRight)
     }
 
-    private fun dismissPreviewPopup(targetAction: (() -> Unit)? = null) {
+    private fun dismissPreviewPopup() {
         removeCallbacks(showPopupRunnable)
         val popup = previewPopup
-        val view = popupView
-        if (popup != null && popup.isShowing && view != null) {
-            view.animate()
-                .scaleX(0.8f)
-                .scaleY(0.8f)
-                .alpha(0f)
-                .setDuration(90)
-                .withEndAction {
-                    try {
-                        popup.dismiss()
-                    } catch (_: Exception) {
-                    }
-                    targetAction?.invoke()
-                }.start()
-        } else {
-            targetAction?.invoke()
+        if (popup != null && popup.isShowing) {
+            try {
+                popup.dismiss()
+            } catch (_: Exception) {
+            }
         }
         activeDirection = null
     }
@@ -202,11 +195,11 @@ class SwipeKeyButton @JvmOverloads constructor(
                 isPressed = true
 
                 // 按鍵按壓微縮動畫
-                animate().scaleX(0.96f).scaleY(0.96f).setDuration(60).start()
+                animate().scaleX(0.96f).scaleY(0.96f).setDuration(50).start()
 
-                // 長按 100ms 展開十字指南針預覽
+                // 長按 220ms 展開十字指南針預覽（快速敲擊 <220ms 絕不喚起彈窗）
                 removeCallbacks(showPopupRunnable)
-                postDelayed(showPopupRunnable, 100L)
+                postDelayed(showPopupRunnable, SHOW_POPUP_DELAY_MS)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -232,24 +225,24 @@ class SwipeKeyButton @JvmOverloads constructor(
             }
             MotionEvent.ACTION_UP -> {
                 isPressed = false
-                animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start()
+                animate().scaleX(1.0f).scaleY(1.0f).setDuration(60).start()
                 val selectedDir = activeDirection
 
-                dismissPreviewPopup {
-                    if (selectedDir != null) {
-                        // 觸發拖選放開上屏
-                        onSwipeListener?.invoke(selectedDir)
-                    } else {
-                        // 原位放開觸發點擊
-                        performClick()
-                        onTapListener?.invoke()
-                    }
+                // 核心關鍵：立即同步派發輸入事件（0 毫秒延遲，絕不等待動畫或異步回呼，杜絕快打時按鍵順序顛倒）
+                if (selectedDir != null) {
+                    onSwipeListener?.invoke(selectedDir)
+                } else {
+                    performClick()
+                    onTapListener?.invoke()
                 }
+
+                // 立即關閉視覺預覽浮層
+                dismissPreviewPopup()
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
                 isPressed = false
-                animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start()
+                animate().scaleX(1.0f).scaleY(1.0f).setDuration(60).start()
                 dismissPreviewPopup()
             }
         }
