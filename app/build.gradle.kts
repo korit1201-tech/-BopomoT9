@@ -43,6 +43,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.androidx.constraintlayout)
+    implementation("com.google.mlkit:digital-ink-recognition:18.1.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -73,7 +73,8 @@ class ZhuyinInputMethodService : InputMethodService() {
     private lateinit var layoutMainFrame: FrameLayout
     private lateinit var layoutResizeHandle: FrameLayout
     private lateinit var handwritingCanvas: com.bopomofo.t9ime.ui.HandwritingCanvasView
-    private var handwritingRecognizer: com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer? = null
+    private var offlineRecognizer: com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer? = null
+    private var googleRecognizer: com.bopomofo.t9ime.engine.GoogleHandwritingRecognizer? = null
 
     private var rootView: View? = null
     private var vibrator: Vibrator? = null
@@ -107,6 +108,24 @@ class ZhuyinInputMethodService : InputMethodService() {
             @Suppress("DEPRECATION")
             getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
+
+        // 初始化 Google ML Kit 官方高精度手寫辨識引擎（背景預先載入/下載）
+        googleRecognizer = com.bopomofo.t9ime.engine.GoogleHandwritingRecognizer(this).apply {
+            setup(
+                languageTag = "zh-Hant",
+                onModelReady = {
+                    android.util.Log.d("BopomofoIME", "Google ML Kit Digital Ink model ready")
+                },
+                onDownloading = {
+                    android.util.Log.d("BopomofoIME", "Google ML Kit Digital Ink model downloading...")
+                }
+            )
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        googleRecognizer?.close()
     }
 
     /**
@@ -198,12 +217,38 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
 
         handwritingCanvas.onRecognizeListener = { strokes ->
-            if (handwritingRecognizer == null) {
-                handwritingRecognizer = com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer(applicationContext)
-            }
-            val candidates = handwritingRecognizer?.recognize(strokes) ?: emptyList()
-            if (candidates.isNotEmpty()) {
-                updateCandidateBar(candidates)
+            if (googleRecognizer?.isReady() == true) {
+                googleRecognizer?.recognize(
+                    strokes,
+                    onSuccess = { texts ->
+                        val candidates = texts.map { DictEntry(it, "", 100000) }
+                        if (candidates.isNotEmpty()) {
+                            updateCandidateBar(candidates)
+                        }
+                    },
+                    onError = {
+                        if (offlineRecognizer == null) {
+                            offlineRecognizer = com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer(applicationContext)
+                        }
+                        val candidates = offlineRecognizer?.recognize(strokes) ?: emptyList()
+                        if (candidates.isNotEmpty()) {
+                            updateCandidateBar(candidates)
+                        }
+                    }
+                )
+            } else {
+                if (offlineRecognizer == null) {
+                    offlineRecognizer = com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer(applicationContext)
+                }
+                val candidates = offlineRecognizer?.recognize(strokes) ?: emptyList()
+                val listWithHint = if (googleRecognizer?.isDownloadingModel() == true) {
+                    listOf(DictEntry("【Google模型下載中...】", "", 999999)) + candidates
+                } else {
+                    candidates
+                }
+                if (listWithHint.isNotEmpty()) {
+                    updateCandidateBar(listWithHint)
+                }
             }
         }
 
@@ -1002,6 +1047,7 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun selectCandidate(entry: DictEntry) {
+        if (entry.word.startsWith("【Google")) return
         commitProcessedText(entry.word)
         lastCommittedWord = entry.word
         engine.clear()
