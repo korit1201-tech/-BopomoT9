@@ -73,7 +73,6 @@ class ZhuyinInputMethodService : InputMethodService() {
     private lateinit var layoutMainFrame: FrameLayout
     private lateinit var layoutResizeHandle: FrameLayout
     private lateinit var handwritingCanvas: com.bopomofo.t9ime.ui.HandwritingCanvasView
-    private var offlineRecognizer: com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer? = null
     private var googleRecognizer: com.bopomofo.t9ime.engine.GoogleHandwritingRecognizer? = null
 
     private var rootView: View? = null
@@ -227,28 +226,16 @@ class ZhuyinInputMethodService : InputMethodService() {
                         }
                     },
                     onError = {
-                        if (offlineRecognizer == null) {
-                            offlineRecognizer = com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer(applicationContext)
-                        }
-                        val candidates = offlineRecognizer?.recognize(strokes) ?: emptyList()
-                        if (candidates.isNotEmpty()) {
-                            updateCandidateBar(candidates)
-                        }
+                        android.util.Log.e("BopomofoIME", "Google handwriting recognition error", it)
                     }
                 )
             } else {
-                if (offlineRecognizer == null) {
-                    offlineRecognizer = com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer(applicationContext)
-                }
-                val candidates = offlineRecognizer?.recognize(strokes) ?: emptyList()
-                val listWithHint = if (googleRecognizer?.isDownloadingModel() == true) {
-                    listOf(DictEntry("【Google模型下載中...】", "", 999999)) + candidates
+                val tip = if (googleRecognizer?.isDownloadingModel() == true) {
+                    listOf(DictEntry("【手寫模型下載中，請稍候...】", "", 999999))
                 } else {
-                    candidates
+                    listOf(DictEntry("【正在載入 Google 手寫模型...】", "", 999999))
                 }
-                if (listWithHint.isNotEmpty()) {
-                    updateCandidateBar(listWithHint)
-                }
+                updateCandidateBar(tip)
             }
         }
 
@@ -1047,7 +1034,7 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun selectCandidate(entry: DictEntry) {
-        if (entry.word.startsWith("【Google")) return
+        if (entry.word.startsWith("【")) return
         commitProcessedText(entry.word)
         lastCommittedWord = entry.word
         engine.clear()
