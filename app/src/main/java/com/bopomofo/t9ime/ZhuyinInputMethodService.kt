@@ -2,9 +2,15 @@ package com.bopomofo.t9ime
 
 import android.annotation.SuppressLint
 import android.graphics.Color
+import android.graphics.Typeface
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -1137,40 +1143,59 @@ class ZhuyinInputMethodService : InputMethodService() {
         set12KeyText(12, "ㄖ ㄥ ㄩ")
     }
 
+    private fun formatNumberKeyLabel(primary: String, secondary: String): CharSequence {
+        val fullText = "$primary\n$secondary"
+        val spannable = SpannableString(fullText)
+        val splitIndex = primary.length
+        val primaryColor = ContextCompat.getColor(this, R.color.kb_text_primary)
+        val secondaryColor = ContextCompat.getColor(this, R.color.kb_text_secondary)
+
+        // 主數字 / 主符號：字體加大、粗體、深色主文字
+        spannable.setSpan(RelativeSizeSpan(1.45f), 0, splitIndex, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(StyleSpan(Typeface.BOLD), 0, splitIndex, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(primaryColor), 0, splitIndex, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+        // 次要字母 / 符號：縮小、柔和次要文字顏色
+        spannable.setSpan(RelativeSizeSpan(0.68f), splitIndex + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(secondaryColor), splitIndex + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+        return spannable
+    }
+
     private fun update12KeyLabelsNumbers() {
-        // 數字/英文混合模式：數字優先顯示，連按切英文字母
+        // 數字模式：主數字放大粗體顯眼，次要符號與字母縮小展示
         val caseT = { s: String -> if (isCapsLock) s.uppercase() else s }
-        set12KeyText(1,  "1 @ . _")
-        set12KeyText(2,  "2 ${caseT("a b c")}")
-        set12KeyText(3,  "3 ${caseT("d e f")}")
-        set12KeyText(4,  "4 ${caseT("g h i")}")
-        set12KeyText(5,  "5 ${caseT("j k l")}")
-        set12KeyText(6,  "6 ${caseT("m n o")}")
-        set12KeyText(7,  "7 ${caseT("p q r s")}")
-        set12KeyText(8,  "8 ${caseT("t u v")}")
-        set12KeyText(9,  "9 ${caseT("w x y z")}")
-        set12KeyText(10, ". - + *")
-        set12KeyText(11, "0 / = )")
-        set12KeyText(12, "# % & !")
+        set12KeyText(1,  formatNumberKeyLabel("1", "@ . _"))
+        set12KeyText(2,  formatNumberKeyLabel("2", caseT("a b c")))
+        set12KeyText(3,  formatNumberKeyLabel("3", caseT("d e f")))
+        set12KeyText(4,  formatNumberKeyLabel("4", caseT("g h i")))
+        set12KeyText(5,  formatNumberKeyLabel("5", caseT("j k l")))
+        set12KeyText(6,  formatNumberKeyLabel("6", caseT("m n o")))
+        set12KeyText(7,  formatNumberKeyLabel("7", caseT("p q r s")))
+        set12KeyText(8,  formatNumberKeyLabel("8", caseT("t u v")))
+        set12KeyText(9,  formatNumberKeyLabel("9", caseT("w x y z")))
+        set12KeyText(10, formatNumberKeyLabel(".", "- + *"))
+        set12KeyText(11, formatNumberKeyLabel("0", "/ = )"))
+        set12KeyText(12, formatNumberKeyLabel("#", "% & !"))
     }
 
     private fun update12KeyLabelsT9English() {
         val caseTransform = { s: String -> if (isCapsLock) s.uppercase() else s.lowercase() }
-        set12KeyText(1, "@ . _ 1")
-        set12KeyText(2, caseTransform("A B C 2"))
-        set12KeyText(3, caseTransform("D E F 3"))
-        set12KeyText(4, caseTransform("G H I 4"))
-        set12KeyText(5, caseTransform("J K L 5"))
-        set12KeyText(6, caseTransform("M N O 6"))
-        set12KeyText(7, caseTransform("P Q R S 7"))
-        set12KeyText(8, caseTransform("T U V 8"))
-        set12KeyText(9, caseTransform("W X Y Z 9"))
-        set12KeyText(10, "- + *")
-        set12KeyText(11, "/ = 0")
-        set12KeyText(12, "% & #")
+        set12KeyText(1,  formatNumberKeyLabel("1", "@ . _"))
+        set12KeyText(2,  formatNumberKeyLabel("2", caseTransform("a b c")))
+        set12KeyText(3,  formatNumberKeyLabel("3", caseTransform("d e f")))
+        set12KeyText(4,  formatNumberKeyLabel("4", caseTransform("g h i")))
+        set12KeyText(5,  formatNumberKeyLabel("5", caseTransform("j k l")))
+        set12KeyText(6,  formatNumberKeyLabel("6", caseTransform("m n o")))
+        set12KeyText(7,  formatNumberKeyLabel("7", caseTransform("p q r s")))
+        set12KeyText(8,  formatNumberKeyLabel("8", caseTransform("t u v")))
+        set12KeyText(9,  formatNumberKeyLabel("9", caseTransform("w x y z")))
+        set12KeyText(10, formatNumberKeyLabel(".", "- + *"))
+        set12KeyText(11, formatNumberKeyLabel("0", "/ = )"))
+        set12KeyText(12, formatNumberKeyLabel("#", "% & !"))
     }
 
-    private fun set12KeyText(keyNum: Int, text: String) {
+    private fun set12KeyText(keyNum: Int, text: CharSequence) {
         val root = layout12Key
         val viewId = when (keyNum) {
             1 -> R.id.key_k1; 2 -> R.id.key_k2; 3 -> R.id.key_k3
@@ -1179,7 +1204,11 @@ class ZhuyinInputMethodService : InputMethodService() {
             10 -> R.id.key_k10; 11 -> R.id.key_k11; 12 -> R.id.key_k12
             else -> return
         }
-        root.findViewById<SwipeKeyButton>(viewId)?.text = text
+        val btn = root.findViewById<SwipeKeyButton>(viewId) ?: return
+        btn.transformationMethod = null
+        btn.includeFontPadding = false
+        btn.setLineSpacing(0f, 0.9f)
+        btn.text = text
     }
 
     private fun getNumberChar(keyNum: Int): String {
