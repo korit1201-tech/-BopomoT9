@@ -235,7 +235,53 @@ class ZhuyinInputMethodService : InputMethodService() {
                     }
                 }
             }
+
+            // 長按精確選擇注音符號 (Long-press Exact Selection)
+            btn.onLongClickListenerCustom = {
+                triggerHapticFeedback()
+                if (currentMode == KeyboardMode.ZHUYIN) {
+                    showZhuyinKeyPopup(btn, keyNum)
+                }
+            }
         }
+    }
+
+    /**
+     * 長按 12 鍵彈出該鍵所屬注音符號選單（所選即所得）
+     */
+    private fun showZhuyinKeyPopup(anchor: View, keyNum: Int) {
+        val chars = com.bopomofo.t9ime.engine.KeyMapping.getChars(keyNum)
+        if (chars.isEmpty()) return
+
+        val popup = android.widget.PopupMenu(this, anchor)
+        for ((index, ch) in chars.withIndex()) {
+            popup.menu.add(0, index, index, ch.toString())
+        }
+        popup.setOnMenuItemClickListener { item ->
+            triggerHapticFeedback()
+            val selectedChar = chars[item.itemId]
+            commitTextDirectly(selectedChar.toString())
+            true
+        }
+        popup.show()
+    }
+
+    /**
+     * 空白鍵長按快選常用標點（，。？！）
+     */
+    private fun showQuickPunctuationPopup(anchor: View) {
+        val puncts = if (isTraditionalMode()) listOf("，", "。", "！", "？", "……", "：") else listOf(",", ".", "!", "?", "...", ":")
+        val popup = android.widget.PopupMenu(this, anchor)
+        for ((index, p) in puncts.withIndex()) {
+            popup.menu.add(0, index, index, p)
+        }
+        popup.setOnMenuItemClickListener { item ->
+            triggerHapticFeedback()
+            val selectedPunct = puncts[item.itemId]
+            commitSymbol(selectedPunct)
+            true
+        }
+        popup.show()
     }
 
     /**
@@ -577,6 +623,12 @@ class ZhuyinInputMethodService : InputMethodService() {
                     }
                 }
             }
+        }
+
+        // 空白鍵長按快選常用標點（，。？！……：）
+        btnSpaceSwipe.onLongClickListenerCustom = {
+            triggerHapticFeedback()
+            showQuickPunctuationPopup(btnSpaceSwipe)
         }
 
         // 逗點與句號 (繁體全形，簡體/英文半形)

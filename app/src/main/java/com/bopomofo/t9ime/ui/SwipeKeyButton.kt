@@ -20,11 +20,21 @@ class SwipeKeyButton @JvmOverloads constructor(
 
     var onTapListener: (() -> Unit)? = null
     var onSwipeListener: ((Direction) -> Unit)? = null
+    var onLongClickListenerCustom: (() -> Unit)? = null
 
     private var startX = 0f
     private var startY = 0f
     private var isMoved = false
+    private var isLongPressedTriggered = false
     private val SWIPE_DISTANCE_THRESHOLD = 40f
+    private val LONG_PRESS_TIMEOUT = 350L
+
+    private val longPressRunnable = Runnable {
+        if (!isMoved && isPressed) {
+            isLongPressedTriggered = true
+            onLongClickListenerCustom?.invoke()
+        }
+    }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
@@ -32,7 +42,10 @@ class SwipeKeyButton @JvmOverloads constructor(
                 startX = event.x
                 startY = event.y
                 isMoved = false
+                isLongPressedTriggered = false
                 isPressed = true
+                removeCallbacks(longPressRunnable)
+                postDelayed(longPressRunnable, LONG_PRESS_TIMEOUT)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -40,12 +53,19 @@ class SwipeKeyButton @JvmOverloads constructor(
                 val dy = event.y - startY
                 if (abs(dx) > SWIPE_DISTANCE_THRESHOLD || abs(dy) > SWIPE_DISTANCE_THRESHOLD) {
                     isMoved = true
+                    removeCallbacks(longPressRunnable)
                 }
             }
             MotionEvent.ACTION_UP -> {
+                removeCallbacks(longPressRunnable)
                 isPressed = false
                 val dx = event.x - startX
                 val dy = event.y - startY
+
+                if (isLongPressedTriggered) {
+                    // 長按已經處理完畢
+                    return true
+                }
 
                 if (isMoved && (abs(dx) > SWIPE_DISTANCE_THRESHOLD || abs(dy) > SWIPE_DISTANCE_THRESHOLD)) {
                     // 觸發滑動 (Swipe)
@@ -64,6 +84,7 @@ class SwipeKeyButton @JvmOverloads constructor(
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
+                removeCallbacks(longPressRunnable)
                 isPressed = false
             }
         }

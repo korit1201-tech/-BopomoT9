@@ -22,14 +22,22 @@ class TrieDictionary {
     val root = TrieNode()
 
     fun insert(entry: DictEntry) {
-        val noToneSeq = KeyMapping.getSequence(entry.zhuyin, ignoreTones = true)
-        if (noToneSeq.isNotEmpty()) {
-            insertSequence(noToneSeq, entry)
+        val noToneSeqs = KeyMapping.getTolerantSequences(entry.zhuyin, ignoreTones = true)
+        for ((index, seq) in noToneSeqs.withIndex()) {
+            if (seq.isNotEmpty()) {
+                val weightFactor = if (index == 0) 1.0 else 0.85
+                val adjustedEntry = if (index == 0) entry else DictEntry(entry.word, entry.zhuyin, (entry.weight * weightFactor).toInt())
+                insertSequence(seq, adjustedEntry)
+            }
         }
 
-        val fullSeq = KeyMapping.getSequence(entry.zhuyin, ignoreTones = false)
-        if (fullSeq != noToneSeq && fullSeq.isNotEmpty()) {
-            insertSequence(fullSeq, entry)
+        val fullSeqs = KeyMapping.getTolerantSequences(entry.zhuyin, ignoreTones = false)
+        for ((index, seq) in fullSeqs.withIndex()) {
+            if (seq.isNotEmpty() && !noToneSeqs.contains(seq)) {
+                val weightFactor = if (index == 0) 1.0 else 0.85
+                val adjustedEntry = if (index == 0) entry else DictEntry(entry.word, entry.zhuyin, (entry.weight * weightFactor).toInt())
+                insertSequence(seq, adjustedEntry)
+            }
         }
     }
 

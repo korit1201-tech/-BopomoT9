@@ -58,4 +58,35 @@ object KeyMapping {
         }
         return list
     }
+
+    /**
+     * 語音容錯正規化：針對台灣人常見的發音混淆（ㄣ/ㄥ, ㄢ/ㄤ, ㄓ/ㄗ, ㄔ/ㄘ, ㄕ/ㄙ, ㄧㄣ/ㄧㄥ）
+     * 產生容錯鍵位序列，讓模糊拼寫依然能精準命中
+     */
+    fun getTolerantSequences(zhuyin: String, ignoreTones: Boolean = false): List<List<Int>> {
+        val baseSeq = getSequence(zhuyin, ignoreTones)
+        val results = mutableListOf(baseSeq)
+
+        // 常見容錯替換表
+        val replacements = listOf(
+            "ㄣ" to "ㄥ", "ㄥ" to "ㄣ",
+            "ㄢ" to "ㄤ", "ㄤ" to "ㄢ",
+            "ㄓ" to "ㄗ", "ㄗ" to "ㄓ",
+            "ㄔ" to "ㄘ", "ㄘ" to "ㄔ",
+            "ㄕ" to "ㄙ", "ㄙ" to "ㄕ",
+            "ㄧㄣ" to "ㄧㄥ", "ㄧㄥ" to "ㄧㄣ",
+            "ㄨㄥ" to "ㄨㄣ", "ㄩㄥ" to "ㄩㄣ"
+        )
+
+        for ((from, to) in replacements) {
+            if (zhuyin.contains(from)) {
+                val altZhuyin = zhuyin.replace(from, to)
+                val altSeq = getSequence(altZhuyin, ignoreTones)
+                if (altSeq.isNotEmpty() && altSeq != baseSeq && !results.contains(altSeq)) {
+                    results.add(altSeq)
+                }
+            }
+        }
+        return results
+    }
 }
