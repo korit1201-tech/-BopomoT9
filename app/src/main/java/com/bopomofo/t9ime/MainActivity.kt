@@ -162,6 +162,31 @@ class MainActivity : AppCompatActivity() {
                 testVibrate(strength)
             }
         })
+
+        setupUpdateCheck()
+    }
+
+    private fun setupUpdateCheck() {
+        val tvCurrentVer = findViewById<TextView>(R.id.tv_current_version)
+        val btnCheck = findViewById<Button>(R.id.btn_check_update)
+
+        tvCurrentVer?.text = "目前安裝版本：v${BuildConfig.VERSION_NAME}"
+
+        btnCheck?.setOnClickListener {
+            btnCheck.isEnabled = false
+            btnCheck.text = "正在連線檢查 GitHub Releases..."
+            com.bopomofo.t9ime.update.AppUpdateManager.checkUpdate { hasUpdate, info, error ->
+                btnCheck.isEnabled = true
+                btnCheck.text = "🔍 檢查 GitHub 新版本"
+                if (error != null) {
+                    Toast.makeText(this, "檢查更新失敗: $error", Toast.LENGTH_LONG).show()
+                } else if (hasUpdate && info != null) {
+                    com.bopomofo.t9ime.update.AppUpdateManager.showUpdateDialog(this, info)
+                } else {
+                    Toast.makeText(this, "🎉 目前已是最新版本 (v${BuildConfig.VERSION_NAME})", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     override fun onResume() {
