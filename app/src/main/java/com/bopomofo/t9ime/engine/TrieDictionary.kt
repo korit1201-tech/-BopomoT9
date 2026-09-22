@@ -24,7 +24,7 @@ class TrieDictionary {
         val noToneSeqs = KeyMapping.getTolerantSequences(entry.zhuyin, ignoreTones = true)
         for ((index, seq) in noToneSeqs.withIndex()) {
             if (seq.isNotEmpty()) {
-                val weightFactor = if (index == 0) 1.0 else 0.85
+                val weightFactor = if (index == 0) 1.0 else 0.55
                 val adjustedEntry = if (index == 0) entry else DictEntry(entry.word, entry.zhuyin, (entry.weight * weightFactor).toInt())
                 insertSequence(seq, adjustedEntry)
             }
@@ -33,7 +33,7 @@ class TrieDictionary {
         val fullSeqs = KeyMapping.getTolerantSequences(entry.zhuyin, ignoreTones = false)
         for ((index, seq) in fullSeqs.withIndex()) {
             if (seq.isNotEmpty() && !noToneSeqs.contains(seq)) {
-                val weightFactor = if (index == 0) 1.0 else 0.85
+                val weightFactor = if (index == 0) 1.0 else 0.55
                 val adjustedEntry = if (index == 0) entry else DictEntry(entry.word, entry.zhuyin, (entry.weight * weightFactor).toInt())
                 insertSequence(seq, adjustedEntry)
             }

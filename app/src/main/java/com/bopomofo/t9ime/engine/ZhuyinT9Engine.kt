@@ -181,10 +181,20 @@ class ZhuyinT9Engine(private val context: Context) {
         val candidateList = mutableListOf<DictEntry>()
         candidateList.addAll(directResults)
 
+        val targetNode = trie.searchNode(currentKeys)
+        val hasExactFullMatch = targetNode != null && targetNode.exactEntries.isNotEmpty()
+
         if (currentKeys.size >= 4) {
             val segmentedSentence = findBestSentence(currentKeys)
             if (segmentedSentence != null && candidateList.none { it.word == segmentedSentence.word }) {
-                candidateList.add(0, segmentedSentence)
+                if (hasExactFullMatch) {
+                    // 若當前鍵位已有字典完整詞條（如「台灣」），將句子推薦放在完整詞之後
+                    val insertIdx = minOf(1, candidateList.size)
+                    candidateList.add(insertIdx, segmentedSentence)
+                } else {
+                    // 若無完全匹配的字典詞（純長句打字），將最優切詞句子置頂！
+                    candidateList.add(0, segmentedSentence)
+                }
             }
         }
 
@@ -217,30 +227,54 @@ class ZhuyinT9Engine(private val context: Context) {
         recalculateCandidatesOnly(candidateList)
     }
 
+    /**
+     * 動態規劃 (DP / Viterbi) 全域最佳分詞演算法
+     * 取代傳統脆弱的貪婪匹配，以全域最優詞頻分數求得長句最佳組合
+     */
     private fun findBestSentence(keys: List<Int>): DictEntry? {
-        val words = mutableListOf<String>()
-        val zhuyins = mutableListOf<String>()
-        var idx = 0
+        val n = keys.size
+        if (n < 4) return null
 
-        while (idx < keys.size) {
-            var matched = false
-            val maxLen = minOf(8, keys.size - idx)
-            for (len in maxLen downTo 1) {
-                val subKeys = keys.subList(idx, idx + len)
-                val node = trie.searchNode(subKeys)
-                if (node != null && node.exactEntries.isNotEmpty()) {
-                    val best = node.exactEntries.maxByOrNull { it.weight }!!
-                    words.add(best.word)
-                    zhuyins.add(best.zhuyin)
-                    idx += len
-                    matched = true
-                    break
+        val dp = DoubleArray(n + 1) { Double.NEGATIVE_INFINITY }
+        dp[0] = 0.0
+        val bestSplit = arrayOfNulls<Pair<Int, DictEntry>>(n + 1)
+
+        for (i in 1..n) {
+            val maxLen = minOf(8, i)
+            for (len in 1..maxLen) {
+                val j = i - len
+                if (dp[j] != Double.NEGATIVE_INFINITY) {
+                    val subKeys = keys.subList(j, i)
+                    val node = trie.searchNode(subKeys)
+                    if (node != null && node.exactEntries.isNotEmpty()) {
+                        val best = node.exactEntries.maxByOrNull { it.weight }!!
+                        // 依詞長度與權重綜合評分，優先偏好較完整的詞彙以避免過度碎詞
+                        val lengthMultiplier = Math.pow(len.toDouble(), 1.25)
+                        val score = dp[j] + Math.log(maxOf(best.weight.toDouble(), 10.0)) * lengthMultiplier
+                        if (score > dp[i]) {
+                            dp[i] = score
+                            bestSplit[i] = Pair(j, best)
+                        }
+                    }
                 }
             }
-            if (!matched) {
-                return null
-            }
         }
+
+        if (dp[n] == Double.NEGATIVE_INFINITY) {
+            return null
+        }
+
+        val words = mutableListOf<String>()
+        val zhuyins = mutableListOf<String>()
+        var curr = n
+        while (curr > 0) {
+            val split = bestSplit[curr] ?: return null
+            words.add(split.second.word)
+            zhuyins.add(split.second.zhuyin)
+            curr = split.first
+        }
+        words.reverse()
+        zhuyins.reverse()
 
         if (words.size > 1) {
             return DictEntry(words.joinToString(""), zhuyins.joinToString(""), 100000000)
