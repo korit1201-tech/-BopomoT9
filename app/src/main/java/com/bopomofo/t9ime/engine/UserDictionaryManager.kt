@@ -85,8 +85,18 @@ class UserDictionaryManager private constructor(private val context: Context) {
         }
     }
 
+    private var savePending = false
+    private val saveHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val saveRunnable = Runnable {
+        executor.execute {
+            saveToFile()
+            savePending = false
+        }
+    }
+
     /**
      * 記錄使用者選擇詞彙（每次點擊選字時調用）
+     * 記憶體內即時累加 count，存檔自動防抖合併寫入，杜絕頻繁 IO
      */
     fun recordUsage(word: String, zhuyin: String = "") {
         if (word.isBlank() || word.startsWith("【")) return
@@ -97,9 +107,10 @@ class UserDictionaryManager private constructor(private val context: Context) {
             entry.count += 1
             entry.lastUsed = System.currentTimeMillis()
         }
-        executor.execute {
-            saveToFile()
-        }
+
+        // 防抖延遲 2.5 秒儲存，打字期間合併寫檔
+        saveHandler.removeCallbacks(saveRunnable)
+        saveHandler.postDelayed(saveRunnable, 2500L)
     }
 
     /**

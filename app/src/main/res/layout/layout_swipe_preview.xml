@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="128dp"
+    android:layout_height="128dp"
+    android:background="@drawable/bg_swipe_popup"
+    android:elevation="8dp"
+    android:padding="6dp">
+
+    <!-- 上 (UP) -->
+    <TextView
+        android:id="@+id/tv_swipe_up"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:layout_alignParentTop="true"
+        android:layout_centerHorizontal="true"
+        android:gravity="center"
+        android:textColor="#334155"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <!-- 左 (LEFT) -->
+    <TextView
+        android:id="@+id/tv_swipe_left"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:layout_alignParentStart="true"
+        android:layout_centerVertical="true"
+        android:gravity="center"
+        android:textColor="#334155"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <!-- 中央 (CENTER 指示點) -->
+    <View
+        android:id="@+id/view_swipe_center"
+        android:layout_width="8dp"
+        android:layout_height="8dp"
+        android:layout_centerInParent="true"
+        android:background="@drawable/bg_resize_pill"
+        android:alpha="0.5" />
+
+    <!-- 右 (RIGHT) -->
+    <TextView
+        android:id="@+id/tv_swipe_right"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:layout_alignParentEnd="true"
+        android:layout_centerVertical="true"
+        android:gravity="center"
+        android:textColor="#334155"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <!-- 下 (DOWN) -->
+    <TextView
+        android:id="@+id/tv_swipe_down"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:layout_alignParentBottom="true"
+        android:layout_centerHorizontal="true"
+        android:gravity="center"
+        android:textColor="#334155"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+</RelativeLayout>

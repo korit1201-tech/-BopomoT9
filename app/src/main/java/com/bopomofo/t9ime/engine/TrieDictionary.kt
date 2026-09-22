@@ -63,19 +63,28 @@ class TrieDictionary {
     fun search(sequence: List<Int>): List<DictEntry> {
         if (sequence.isEmpty()) return emptyList()
 
-        val targetNode = searchNode(sequence) ?: return emptyList()
-
-        val exactList = targetNode.exactEntries.distinctBy { it.word }.sortedByDescending { it.weight }
-        val prefixList = mutableListOf<DictEntry>()
-        collectPrefix(targetNode, prefixList, 0, maxDepth = 3)
-
-        val sortedPrefix = prefixList.distinctBy { it.word }.sortedByDescending { it.weight }
+        val exactList = searchExact(sequence)
+        val prefixList = searchPrefix(sequence)
 
         val combined = mutableListOf<DictEntry>()
         combined.addAll(exactList)
-        combined.addAll(sortedPrefix.filter { p -> exactList.none { it.word == p.word } })
-
+        combined.addAll(prefixList)
         return combined
+    }
+
+    fun searchExact(sequence: List<Int>): List<DictEntry> {
+        if (sequence.isEmpty()) return emptyList()
+        val targetNode = searchNode(sequence) ?: return emptyList()
+        return targetNode.exactEntries.distinctBy { it.word }.sortedByDescending { it.weight }
+    }
+
+    fun searchPrefix(sequence: List<Int>, maxDepth: Int = 3): List<DictEntry> {
+        if (sequence.isEmpty()) return emptyList()
+        val targetNode = searchNode(sequence) ?: return emptyList()
+        val exactWords = targetNode.exactEntries.map { it.word }.toSet()
+        val prefixList = mutableListOf<DictEntry>()
+        collectPrefix(targetNode, prefixList, 0, maxDepth)
+        return prefixList.distinctBy { it.word }.filter { it.word !in exactWords }.sortedByDescending { it.weight }
     }
 
     private fun collectPrefix(node: TrieNode, results: MutableList<DictEntry>, depth: Int, maxDepth: Int) {

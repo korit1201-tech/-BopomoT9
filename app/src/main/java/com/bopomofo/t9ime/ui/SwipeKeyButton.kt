@@ -1,12 +1,22 @@
 package com.bopomofo.t9ime.ui
 
 import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.util.AttributeSet
+import android.view.Gravity
+import android.view.LayoutInflater
 import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+import android.widget.PopupWindow
+import android.widget.TextView
+import com.bopomofo.t9ime.R
 import kotlin.math.abs
 
 /**
- * 支援 Tap (點擊，含快速連點) 與 4 方向 Swipe (滑動) 的自訂按鍵
+ * 支援 Tap (點擊) 與 4 方向長拉拖選 (Drag-to-select Swipe) 的自訂按鍵，
+ * 內建 4 向十字指示羅盤與動態縮放高亮視覺動畫反饋。
  */
 class SwipeKeyButton @JvmOverloads constructor(
     context: Context,
@@ -22,22 +32,163 @@ class SwipeKeyButton @JvmOverloads constructor(
     var onSwipeListener: ((Direction) -> Unit)? = null
     var onLongClickListenerCustom: (() -> Unit)? = null
 
+    /**
+     * 提供四方向字符映射表（由 Service 綁定，若有提供則啟用拖動視覺指示動畫）
+     */
+    var swipeLabelsProvider: (() -> Map<Direction, String>)? = null
+
     private var startX = 0f
     private var startY = 0f
     private var downTime = 0L
     private var isMoved = false
-    private var isLongPressedTriggered = false
-    private val SWIPE_THRESHOLD_DP = 28f // 28dp (約 75~85px)，防止快打拇指微移誤觸滑動
-    private val LONG_PRESS_TIMEOUT = 350L
+    private var activeDirection: Direction? = null
 
+    private val SWIPE_THRESHOLD_DP = 16f
     private val swipeThresholdPx: Float
         get() = SWIPE_THRESHOLD_DP * resources.displayMetrics.density
 
-    private val longPressRunnable = Runnable {
-        if (!isMoved && isPressed) {
-            isLongPressedTriggered = true
-            onLongClickListenerCustom?.invoke()
+    // 視覺預覽浮動視窗
+    private var previewPopup: PopupWindow? = null
+    private var popupView: View? = null
+    private var tvUp: TextView? = null
+    private var tvDown: TextView? = null
+    private var tvLeft: TextView? = null
+    private var tvRight: TextView? = null
+
+    private val showPopupRunnable = Runnable {
+        if (isPressed) {
+            showPreviewPopup()
         }
+    }
+
+    private fun initPopupView() {
+        if (previewPopup != null) return
+        try {
+            val view = LayoutInflater.from(context).inflate(R.layout.layout_swipe_preview, null)
+            popupView = view
+            tvUp = view.findViewById(R.id.tv_swipe_up)
+            tvDown = view.findViewById(R.id.tv_swipe_down)
+            tvLeft = view.findViewById(R.id.tv_swipe_left)
+            tvRight = view.findViewById(R.id.tv_swipe_right)
+
+            val density = resources.displayMetrics.density
+            val sizePx = (132 * density).toInt()
+            previewPopup = PopupWindow(view, sizePx, sizePx, false).apply {
+                setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                isClippingEnabled = false
+                animationStyle = 0
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun showPreviewPopup() {
+        val labels = swipeLabelsProvider?.invoke() ?: return
+        if (labels.isEmpty()) return
+
+        initPopupView()
+        val popup = previewPopup ?: return
+        val view = popupView ?: return
+
+        tvUp?.text = labels[Direction.UP] ?: ""
+        tvDown?.text = labels[Direction.DOWN] ?: ""
+        tvLeft?.text = labels[Direction.LEFT] ?: ""
+        tvRight?.text = labels[Direction.RIGHT] ?: ""
+
+        resetPopupItemStates()
+
+        try {
+            if (!popup.isShowing && windowToken != null) {
+                val loc = IntArray(2)
+                getLocationInWindow(loc)
+                val density = resources.displayMetrics.density
+                val popupSize = (132 * density).toInt()
+                val xOff = loc[0] + (width - popupSize) / 2
+                val yOff = loc[1] - popupSize - (10 * density).toInt() // 浮在按鍵上方
+
+                // 彈入微動態動畫
+                view.scaleX = 0.85f
+                view.scaleY = 0.85f
+                view.alpha = 0f
+                popup.showAtLocation(this, Gravity.NO_GRAVITY, xOff, yOff)
+                view.animate().scaleX(1.0f).scaleY(1.0f).alpha(1.0f).setDuration(120).start()
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun updateActiveDirection(newDir: Direction?) {
+        if (activeDirection == newDir) return
+        activeDirection = newDir
+
+        // 觸覺微反饋
+        if (newDir != null) {
+            try {
+                performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+            } catch (_: Exception) {
+            }
+        }
+
+        val applyState = { tv: TextView?, isTarget: Boolean ->
+            if (tv == null || tv.text.isNullOrEmpty()) {
+                tv?.visibility = View.INVISIBLE
+            } else {
+                tv.visibility = View.VISIBLE
+                if (isTarget) {
+                    tv.setBackgroundResource(R.drawable.bg_swipe_item_active)
+                    tv.setTextColor(Color.WHITE)
+                    tv.animate().scaleX(1.35f).scaleY(1.35f).alpha(1.0f).setDuration(90).start()
+                } else {
+                    tv.background = null
+                    tv.setTextColor(Color.parseColor("#475569"))
+                    tv.animate().scaleX(1.0f).scaleY(1.0f).alpha(if (newDir == null) 1.0f else 0.4f).setDuration(90).start()
+                }
+            }
+        }
+
+        applyState(tvUp, newDir == Direction.UP)
+        applyState(tvDown, newDir == Direction.DOWN)
+        applyState(tvLeft, newDir == Direction.LEFT)
+        applyState(tvRight, newDir == Direction.RIGHT)
+    }
+
+    private fun resetPopupItemStates() {
+        val reset = { tv: TextView? ->
+            if (tv != null) {
+                tv.background = null
+                tv.setTextColor(Color.parseColor("#334155"))
+                tv.scaleX = 1.0f
+                tv.scaleY = 1.0f
+                tv.alpha = 1.0f
+            }
+        }
+        reset(tvUp)
+        reset(tvDown)
+        reset(tvLeft)
+        reset(tvRight)
+    }
+
+    private fun dismissPreviewPopup(targetAction: (() -> Unit)? = null) {
+        removeCallbacks(showPopupRunnable)
+        val popup = previewPopup
+        val view = popupView
+        if (popup != null && popup.isShowing && view != null) {
+            view.animate()
+                .scaleX(0.8f)
+                .scaleY(0.8f)
+                .alpha(0f)
+                .setDuration(90)
+                .withEndAction {
+                    try {
+                        popup.dismiss()
+                    } catch (_: Exception) {
+                    }
+                    targetAction?.invoke()
+                }.start()
+        } else {
+            targetAction?.invoke()
+        }
+        activeDirection = null
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -47,63 +198,59 @@ class SwipeKeyButton @JvmOverloads constructor(
                 startY = event.y
                 downTime = System.currentTimeMillis()
                 isMoved = false
-                isLongPressedTriggered = false
+                activeDirection = null
                 isPressed = true
-                removeCallbacks(longPressRunnable)
-                postDelayed(longPressRunnable, LONG_PRESS_TIMEOUT)
+
+                // 按鍵按壓微縮動畫
+                animate().scaleX(0.96f).scaleY(0.96f).setDuration(60).start()
+
+                // 長按 100ms 展開十字指南針預覽
+                removeCallbacks(showPopupRunnable)
+                postDelayed(showPopupRunnable, 100L)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
                 val dx = event.x - startX
                 val dy = event.y - startY
                 val threshold = swipeThresholdPx
+
                 if (abs(dx) > threshold || abs(dy) > threshold) {
                     isMoved = true
-                    removeCallbacks(longPressRunnable)
+                    if (previewPopup == null || previewPopup?.isShowing == false) {
+                        showPreviewPopup()
+                    }
+                    val isDominantX = abs(dx) > abs(dy)
+                    val dir = if (isDominantX) {
+                        if (dx > 0) Direction.RIGHT else Direction.LEFT
+                    } else {
+                        if (dy > 0) Direction.DOWN else Direction.UP
+                    }
+                    updateActiveDirection(dir)
+                } else {
+                    updateActiveDirection(null)
                 }
             }
             MotionEvent.ACTION_UP -> {
-                removeCallbacks(longPressRunnable)
                 isPressed = false
-                val dx = event.x - startX
-                val dy = event.y - startY
-                val threshold = swipeThresholdPx
-                val elapsed = System.currentTimeMillis() - downTime
+                animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start()
+                val selectedDir = activeDirection
 
-                if (isLongPressedTriggered) {
-                    // 長按已經處理完畢
-                    return true
-                }
-
-                // 判斷是否為真正的滑動（Swipe）：
-                // 1. 按壓時間超過 80ms（極快速彈起一律視為點擊，杜絕連打誤觸）
-                // 2. 位移距離超過 dp 門檻
-                // 3. 主軸位移需至少為次軸位移的 1.3 倍（斜向微動不觸發滑動）
-                val isDominantX = abs(dx) > abs(dy) * 1.3f
-                val isDominantY = abs(dy) > abs(dx) * 1.3f
-                val isSwipe = elapsed >= 80L && isMoved && (
-                    (abs(dx) > threshold && isDominantX) || (abs(dy) > threshold && isDominantY)
-                )
-
-                if (isSwipe) {
-                    // 觸發滑動 (Swipe)
-                    if (isDominantX) {
-                        if (dx > 0) onSwipeListener?.invoke(Direction.RIGHT)
-                        else onSwipeListener?.invoke(Direction.LEFT)
+                dismissPreviewPopup {
+                    if (selectedDir != null) {
+                        // 觸發拖選放開上屏
+                        onSwipeListener?.invoke(selectedDir)
                     } else {
-                        if (dy > 0) onSwipeListener?.invoke(Direction.DOWN)
-                        else onSwipeListener?.invoke(Direction.UP)
+                        // 原位放開觸發點擊
+                        performClick()
+                        onTapListener?.invoke()
                     }
-                } else {
-                    // 只要放開即視為一次點擊，絕不丟失任何一次按鍵！
-                    performClick()
-                    onTapListener?.invoke()
                 }
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
-                removeCallbacks(longPressRunnable)
                 isPressed = false
+                animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start()
+                dismissPreviewPopup()
             }
         }
         return super.onTouchEvent(event)
@@ -112,5 +259,16 @@ class SwipeKeyButton @JvmOverloads constructor(
     override fun performClick(): Boolean {
         super.performClick()
         return true
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        removeCallbacks(showPopupRunnable)
+        try {
+            previewPopup?.dismiss()
+        } catch (_: Exception) {
+        }
+        previewPopup = null
+        popupView = null
     }
 }

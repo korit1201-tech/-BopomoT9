@@ -33,6 +33,23 @@ object KeyMapping {
     }
 
     /**
+     * 零韻母聲母集合（參考 libchewing）
+     * ㄓ/ㄔ/ㄕ/ㄖ/ㄗ/ㄘ/ㄙ 這七個聲母可以不搭配韻母單獨成音節（空韻 ㄭ）
+     * 台灣使用者有時習慣在後面多輸入一個 ㄜ，需要同時建立兩種鍵序索引
+     */
+    private val ZERO_RHYME_CONSONANTS = setOf('ㄓ', 'ㄔ', 'ㄕ', 'ㄖ', 'ㄗ', 'ㄘ', 'ㄙ')
+
+    /** 所有聲母（用於判斷下一個字元是否為新音節的開頭） */
+    private val ALL_INITIALS = setOf(
+        'ㄅ', 'ㄆ', 'ㄇ', 'ㄈ', 'ㄉ', 'ㄊ', 'ㄋ', 'ㄌ',
+        'ㄍ', 'ㄎ', 'ㄏ', 'ㄐ', 'ㄑ', 'ㄒ',
+        'ㄓ', 'ㄔ', 'ㄕ', 'ㄖ', 'ㄗ', 'ㄘ', 'ㄙ'
+    )
+
+    /** 聲調符號集合 */
+    private val TONE_MARKS = setOf('ˊ', 'ˇ', 'ˋ', '˙')
+
+    /**
      * 取得某個注音字元所屬的鍵位編號 (1~12)
      */
     fun getKeyId(char: Char): Int? = CHAR_TO_KEY_MAP[char]
@@ -60,7 +77,34 @@ object KeyMapping {
     }
 
     /**
+     * 零韻母展開：對注音字串中每個「零韻母聲母」後面插入 ㄜ，
+     * 產生使用者「多打一個 ㄜ」時對應的展開注音字串。
+     *
+     * 例：ㄕˊㄇㄜ˙ → ㄕㄜˊㄇㄜ˙（讓 [9,7,7,7] 也能查到「什麼」）
+     *
+     * 判斷「零韻母」的條件：該聲母後面緊接著聲調符號、另一個聲母，或字串結尾
+     */
+    private fun buildZeroRhymeExpanded(zhuyin: String): String {
+        val sb = StringBuilder()
+        var i = 0
+        while (i < zhuyin.length) {
+            val ch = zhuyin[i]
+            sb.append(ch)
+            if (ch in ZERO_RHYME_CONSONANTS) {
+                val next = zhuyin.getOrNull(i + 1)
+                val isZeroRhyme = next == null || next in TONE_MARKS || next in ALL_INITIALS
+                if (isZeroRhyme) {
+                    sb.append('ㄜ') // 注入使用者可能多打的 ㄜ
+                }
+            }
+            i++
+        }
+        return sb.toString()
+    }
+
+    /**
      * 語音容錯正規化：針對台灣人常見的發音混淆（ㄣ/ㄥ, ㄢ/ㄤ, ㄓ/ㄗ, ㄔ/ㄘ, ㄕ/ㄙ, ㄧㄣ/ㄧㄥ）
+     * 以及零韻母聲母（ㄓ/ㄔ/ㄕ/ㄖ/ㄗ/ㄘ/ㄙ）使用者多打 ㄜ 的習慣，
      * 產生容錯鍵位序列，讓模糊拼寫依然能精準命中
      */
     fun getTolerantSequences(zhuyin: String, ignoreTones: Boolean = false): List<List<Int>> {
@@ -87,6 +131,16 @@ object KeyMapping {
                 }
             }
         }
+
+        // 零韻母容錯（libchewing 策略）：對可能被使用者多打 ㄜ 的音節產生展開鍵序
+        val expandedZhuyin = buildZeroRhymeExpanded(zhuyin)
+        if (expandedZhuyin != zhuyin) {
+            val expandedSeq = getSequence(expandedZhuyin, ignoreTones)
+            if (expandedSeq.isNotEmpty() && !results.contains(expandedSeq)) {
+                results.add(expandedSeq)
+            }
+        }
+
         return results
     }
 }

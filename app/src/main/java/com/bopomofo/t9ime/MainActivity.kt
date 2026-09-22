@@ -95,6 +95,73 @@ class MainActivity : AppCompatActivity() {
                 .setNegativeButton("取消", null)
                 .show()
         }
+
+        setupVibrationSettings()
+    }
+
+    private fun setupVibrationSettings() {
+        val prefs = getSharedPreferences("ime_prefs", MODE_PRIVATE)
+        val switchVib = findViewById<androidx.appcompat.widget.SwitchCompat>(R.id.switch_vibration)
+        val layoutStrength = findViewById<android.view.View>(R.id.layout_vibration_strength)
+        val seekbarStrength = findViewById<android.widget.SeekBar>(R.id.seekbar_vibration_strength)
+        val tvStrengthVal = findViewById<TextView>(R.id.tv_vibration_strength_val)
+
+        val isEnabled = prefs.getBoolean("pref_vibration_enabled", true)
+        val savedStrength = prefs.getInt("pref_vibration_strength", 30).coerceIn(5, 100)
+
+        switchVib?.isChecked = isEnabled
+        layoutStrength?.visibility = if (isEnabled) android.view.View.VISIBLE else android.view.View.GONE
+        seekbarStrength?.progress = savedStrength
+        tvStrengthVal?.text = "$savedStrength ms"
+
+        val vibrator = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            val vm = getSystemService(VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
+            vm?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(VIBRATOR_SERVICE) as? android.os.Vibrator
+        }
+
+        val testVibrate = { ms: Int ->
+            try {
+                if (vibrator != null && vibrator.hasVibrator()) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        val amplitude = ((ms / 100f) * 255).toInt().coerceIn(1, 255)
+                        val effect = android.os.VibrationEffect.createOneShot(ms.toLong(), amplitude)
+                        vibrator.vibrate(effect)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator.vibrate(ms.toLong())
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        switchVib?.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("pref_vibration_enabled", isChecked).apply()
+            layoutStrength?.visibility = if (isChecked) android.view.View.VISIBLE else android.view.View.GONE
+            if (isChecked) {
+                testVibrate(seekbarStrength?.progress ?: 30)
+            }
+        }
+
+        seekbarStrength?.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                val strength = progress.coerceIn(5, 100)
+                tvStrengthVal?.text = "$strength ms"
+                if (fromUser) {
+                    prefs.edit().putInt("pref_vibration_strength", strength).apply()
+                    testVibrate(strength)
+                }
+            }
+
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {
+                val strength = (seekBar?.progress ?: 30).coerceIn(5, 100)
+                prefs.edit().putInt("pref_vibration_strength", strength).apply()
+                testVibrate(strength)
+            }
+        })
     }
 
     override fun onResume() {

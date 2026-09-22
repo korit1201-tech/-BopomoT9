@@ -5,21 +5,25 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 /**
- * 注音 T9 解碼、動態分詞、接續詞預測與自動上屏引擎
+ * 注音 T9 解碼引擎（基於 libchewing-data 詞庫）
+ *
+ * 設計原則：
+ * - 完全依賴 libchewing 的頻率權重排序，不做自訂預測邏輯
+ * - Trie 前綴樹查詢 + 個人化使用頻率加權（UserDictionary）
+ * - 零韻母容錯已在 KeyMapping.getTolerantSequences() 處理
  */
 class ZhuyinT9Engine(private val context: Context) {
 
     private val trie = TrieDictionary()
-    private val currentKeys = mutableListOf<Int>()
+    private var currentKeys = mutableListOf<Int>()
     private var currentToneIndex = 0
 
     private var cachedCandidates: List<DictEntry> = emptyList()
     private var cachedZhuyinCombos: List<String> = emptyList()
     private var lockedZhuyinCombo: String? = null
 
-    // 聯想詞庫 (Next-word Prediction)：記錄「上一個詞」接續「下一個推薦詞」
-    private val nextWordAssociations = mutableMapOf<String, MutableList<String>>()
     private val userDict = UserDictionaryManager.getInstance(context)
+    private val nextWordMap = mutableMapOf<String, MutableList<DictEntry>>()
 
     companion object {
         val TONE_SYMBOLS = listOf(' ', 'ˇ', 'ˋ', 'ˊ', '˙')
@@ -28,7 +32,6 @@ class ZhuyinT9Engine(private val context: Context) {
     init {
         loadDictionary()
         loadUserDictionaryEntries()
-        initAssociations()
         userDict.onDictionaryChangedListener = {
             loadUserDictionaryEntries()
             if (currentKeys.isNotEmpty()) {
@@ -41,9 +44,17 @@ class ZhuyinT9Engine(private val context: Context) {
         val userEntries = userDict.getAllEntries()
         for (u in userEntries) {
             if (u.zhuyin.isNotEmpty()) {
-                val weight = 5000000 + minOf(u.count * 6000000, 100000000)
+                // 使用者選過的詞給予高優先權，確保出現在候選詞中
+                val weight = 5_000_000 + minOf(u.count * 6_000_000, 100_000_000)
                 trie.insert(DictEntry(u.word, u.zhuyin, weight))
             }
+        }
+    }
+
+    private fun addNextWord(prefix: String, next: String, weight: Int) {
+        val list = nextWordMap.getOrPut(prefix) { ArrayList(8) }
+        if (list.size < 12 && list.none { it.word == next }) {
+            list.add(DictEntry(next, "", weight))
         }
     }
 
@@ -54,86 +65,41 @@ class ZhuyinT9Engine(private val context: Context) {
                     for (line in lines) {
                         val parts = line.split("\t")
                         if (parts.size >= 3) {
-                            val word = parts[0]
+                            val word   = parts[0]
                             val zhuyin = parts[1]
                             val weight = parts[2].toIntOrNull() ?: 100
                             trie.insert(DictEntry(word, zhuyin, weight))
+
+                            // 單次讀取時一併從 libchewing 詞庫構建接續聯想詞庫，絕不重複讀檔
+                            if (word.length in 2..4 && weight >= 10) {
+                                when (word.length) {
+                                    2 -> {
+                                        addNextWord(word.substring(0, 1), word.substring(1), weight)
+                                    }
+                                    3 -> {
+                                        addNextWord(word.substring(0, 1), word.substring(1), weight)
+                                        addNextWord(word.substring(0, 2), word.substring(2), weight)
+                                    }
+                                    4 -> {
+                                        addNextWord(word.substring(0, 2), word.substring(2), weight)
+                                        addNextWord(word.substring(0, 1), word.substring(1), weight)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+            }
+
+            for ((_, list) in nextWordMap) {
+                list.sortByDescending { it.weight }
             }
         } catch (e: Exception) {
             android.util.Log.e("BopomofoIME", "字典載入失敗", e)
         }
     }
 
-    /**
-     * 常用接續聯想詞表（2-gram / N-gram 語言模型）
-     * 參考 rime-bopomofo-t9 / 万象語意關聯強化台灣在地高頻對話接續詞
-     */
-    private fun initAssociations() {
-        val rules = mapOf(
-            "你" to listOf("好", "在幹嘛", "在哪裡", "覺得呢", "知道嗎", "可以嗎", "有空嗎", "要不要", "要去哪", "吃飯沒", "先忙"),
-            "你好" to listOf("！", "，", "請問", "我是", "早安", "晚安", "歡迎", "大家", "很高興認識你"),
-            "我" to listOf("是", "在", "想", "要", "知道", "覺得", "喜歡", "今天", "現在", "可以", "到了", "出發了", "等等到", "不知道"),
-            "他" to listOf("是", "說", "在", "想", "要", "知道", "今天", "去哪", "回來了沒"),
-            "她" to listOf("是", "說", "在", "想", "要", "知道", "今天", "也在"),
-            "我們" to listOf("一起", "要不要", "等等", "明天", "今天", "去看", "去吃", "開會", "約幾點"),
-            "謝謝" to listOf("你", "您", "大家", "配合", "分享", "幫忙", "關心", "收到了", "！"),
-            "貢丸" to listOf("湯", "好吃", "新竹", "麵", "米粉", "冬粉"),
-            "台灣" to listOf("高鐵", "大學", "美食", "天氣", "啤酒", "銀行", "之光", "夜市", "文化"),
-            "今天" to listOf("天氣", "晚上", "中午", "早上", "星期幾", "要吃什麼", "好累", "放假", "辛苦了", "好熱", "下雨"),
-            "明天" to listOf("見", "早上", "晚上", "下午", "放假", "要開會", "幾點", "天氣如何"),
-            "昨天" to listOf("晚上", "太累了", "忘記了", "有去", "謝謝你"),
-            "現在" to listOf("在哪", "可以嗎", "出發", "幾點了", "要走嗎", "在路上"),
-            "什麼" to listOf("時候", "意思", "名字", "東西", "事情", "原因", "好吃的", "地方"),
-            "怎麼" to listOf("了", "樣", "辦", "去", "做", "會這樣", "聯絡", "走"),
-            "可以" to listOf("嗎", "幫我", "直接", "一起", "考慮", "使用", "傳給我", "等我一下"),
-            "沒問題" to listOf("！", "，我來處理", "，交給我", "馬上辦", "，晚點給您"),
-            "好的" to listOf("！", "，收到", "，謝謝", "，馬上處理", "，沒問題"),
-            "收到" to listOf("！", "，謝謝", "，了解", "，辛苦了"),
-            "大家" to listOf("好", "早安", "晚安", "辛苦了", "注意安全", "加油"),
-            "早安" to listOf("！", "，祝你有美好的一天", "，今天好冷", "，大家早"),
-            "晚安" to listOf("！", "，祝好夢", "，明天見", "，早點休息"),
-            "工作" to listOf("順利", "認真", "人員", "愉快", "機會", "忙碌", "進度"),
-            "請" to listOf("稍等", "幫我", "過目", "參考", "查收", "進一步", "多多指教"),
-            "麻煩" to listOf("你", "您", "幫我", "了", "盡快", "協助"),
-            "真的" to listOf("假的", "很棒", "太好笑了", "辛苦了", "不好意思", "好吃"),
-            "不好意思" to listOf("打擾了", "請問", "讓您久等了", "謝謝"),
-            "辛苦" to listOf("了", "大家了", "您了", "這陣子"),
-            "恭喜" to listOf("！", "發財", "老爺", "升遷", "賀喜"),
-            "祝" to listOf("你", "您", "順心", "早日康復", "生日快樂", "平安順遂"),
-            "生日" to listOf("快樂", "大餐", "禮物", "願望"),
-            "一起" to listOf("去吃", "出發", "加油", "努力", "討論"),
-            "要不要" to listOf("一起", "喝飲料", "吃宵夜", "去看電影", "先休息"),
-            "吃" to listOf("飽沒", "飯了沒", "什麼", "宵夜", "早餐", "午餐", "晚餐"),
-            "喝" to listOf("飲料", "咖啡", "水", "一杯", "茶"),
-            "路上" to listOf("小心", "注意安全", "塞車嗎", "順風"),
-            "到了" to listOf("跟我說", "再聯絡", "門口了", "捷運站"),
-            "幾點" to listOf("見面", "出發", "開會", "到", "下班"),
-            "哪裡" to listOf("見面", "集合", "買的", "好吃")
-        )
-        for ((k, v) in rules) {
-            nextWordAssociations[k] = v.toMutableList()
-        }
-    }
-
-    /**
-     * 取得特定已上屏詞彙的接續推薦詞列表
-     */
-    fun getNextWordPredictions(lastWord: String): List<DictEntry> {
-        val list = nextWordAssociations[lastWord] ?: emptyList()
-        if (list.isNotEmpty()) {
-            return list.map { DictEntry(it, "", 1000) }
-        }
-        // 若無完全匹配，嘗試前綴字
-        for ((k, v) in nextWordAssociations) {
-            if (lastWord.endsWith(k)) {
-                return v.map { DictEntry(it, "", 1000) }
-            }
-        }
-        return emptyList()
-    }
+    // ───────── 按鍵操作 ─────────
 
     fun pressKey(keyId: Int): List<DictEntry> {
         currentKeys.add(keyId)
@@ -151,15 +117,13 @@ class ZhuyinT9Engine(private val context: Context) {
         if (currentKeys.isNotEmpty() && currentKeys.last() == 11) {
             currentKeys.removeAt(currentKeys.size - 1)
         }
-
         if (currentToneIndex > 0) {
             currentKeys.add(11)
         }
 
         lockedZhuyinCombo = null
         recalculate()
-        val toneChar = TONE_SYMBOLS[currentToneIndex]
-        return Pair(toneChar, cachedCandidates)
+        return Pair(TONE_SYMBOLS[currentToneIndex], cachedCandidates)
     }
 
     fun backspace(): List<DictEntry> {
@@ -188,6 +152,8 @@ class ZhuyinT9Engine(private val context: Context) {
         return cachedCandidates
     }
 
+    // ───────── 核心查詢邏輯 ─────────
+
     private fun recalculate() {
         if (currentKeys.isEmpty()) {
             cachedCandidates = emptyList()
@@ -195,59 +161,81 @@ class ZhuyinT9Engine(private val context: Context) {
             return
         }
 
-        val directResults = trie.search(currentKeys)
-        val candidateList = mutableListOf<DictEntry>()
-        candidateList.addAll(directResults)
+        val exactResults = trie.searchExact(currentKeys)
+        val prefixResults = trie.searchPrefix(currentKeys, maxDepth = 3)
 
-        val targetNode = trie.searchNode(currentKeys)
-        val hasExactFullMatch = targetNode != null && targetNode.exactEntries.isNotEmpty()
-
-        if (currentKeys.size >= 4) {
-            val segmentedSentence = findBestSentence(currentKeys)
-            if (segmentedSentence != null && candidateList.none { it.word == segmentedSentence.word }) {
-                if (hasExactFullMatch) {
-                    // 若當前鍵位已有字典完整詞條（如「台灣」），將句子推薦放在完整詞之後
-                    val insertIdx = minOf(1, candidateList.size)
-                    candidateList.add(insertIdx, segmentedSentence)
-                } else {
-                    // 若無完全匹配的字典詞（純長句打字），將最優切詞句子置頂！
-                    candidateList.add(0, segmentedSentence)
-                }
-            }
+        // 聲調過濾
+        val toneChar = if (currentToneIndex > 0) TONE_SYMBOLS[currentToneIndex] else null
+        val filterTone = { list: List<DictEntry> ->
+            if (toneChar != null) {
+                val filtered = list.filter { it.zhuyin.contains(toneChar) }
+                if (filtered.isNotEmpty()) filtered else list
+            } else list
         }
 
-        val comboSet = LinkedHashSet<String>()
-        // 純注音按鍵數（排除聲調鍵 K11），用於截取注音前綴
-        val toneChar = if (currentToneIndex > 0) TONE_SYMBOLS[currentToneIndex] else null
+        // Tier 1: 完全匹配詞排序（使用者常選詞穩居第一位）
+        val rankedExact = filterTone(exactResults).sortedByDescending {
+            it.weight + userDict.getBoost(it.word)
+        }
+
+        // Tier 2: DP 最佳長句分詞（一口氣輸入較長句子 >= 4 鍵時）
+        val segmentedSentence = if (currentKeys.size >= 4) {
+            findBestSentence(currentKeys)
+        } else null
+
+        // Tier 3: 前綴預測詞排序
+        val rankedPrefix = filterTone(prefixResults).sortedByDescending {
+            it.weight + userDict.getBoost(it.word)
+        }
+
+        // 組合候選詞（階梯式嚴格優先級）：
+        // 1. 若無字典完全匹配詞（純連續打長句子），DP 分詞預測的中文句子直接置頂排在第一位（藍色高亮）！
+        // 2. 若有完全匹配詞，常選詞/完全匹配排第一，預測長句緊跟其後，子節點長詞永遠排在最後！
+        val candidateList = mutableListOf<DictEntry>()
+        if (segmentedSentence != null && rankedExact.none { it.word == segmentedSentence.word }) {
+            if (rankedExact.isEmpty()) {
+                candidateList.add(segmentedSentence)
+                candidateList.addAll(rankedPrefix.filter { it.word != segmentedSentence.word })
+            } else {
+                candidateList.addAll(rankedExact)
+                candidateList.add(segmentedSentence)
+                candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
+            }
+        } else {
+            candidateList.addAll(rankedExact)
+            candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
+        }
+
+        // 計算純注音按鍵長度（排除聲調鍵 K11）
         val phonemeKeyLen = currentKeys.count { it != 11 }
 
+        // 從 top 候選詞抽取注音前綴組合（最多 4 個，避免雜訊）
+        val comboSet = LinkedHashSet<String>()
         for (entry in candidateList) {
-            val clean = entry.zhuyin.filter { it !in "ˇˋˊ˙" }
+            val clean  = entry.zhuyin.filter { it !in "ˇˋˊ˙" }
             val prefix = if (clean.length >= phonemeKeyLen) clean.substring(0, phonemeKeyLen) else clean
-            // 若使用者已選聲調，在顯示標籤上附加聲調符號
-            val displayLabel = if (toneChar != null) "$prefix$toneChar" else prefix
-            comboSet.add(displayLabel)
-            if (comboSet.size >= 8) break
+            val label  = if (toneChar != null) "$prefix$toneChar" else prefix
+            if (label.isNotEmpty()) comboSet.add(label)
+            if (comboSet.size >= 4) break
         }
 
         if (comboSet.isEmpty()) {
             val sb = StringBuilder()
             for (k in currentKeys) {
-                if (k == 11) continue  // 聲調鍵由 toneChar 處理
+                if (k == 11) continue
                 val chs = KeyMapping.getChars(k)
                 if (chs.isNotEmpty()) sb.append(chs[0])
             }
-            val fallback = if (toneChar != null) "${sb}${toneChar}" else sb.toString()
-            comboSet.add(fallback)
+            comboSet.add(if (toneChar != null) "${sb}${toneChar}" else sb.toString())
         }
 
         cachedZhuyinCombos = comboSet.toList()
-        recalculateCandidatesOnly(candidateList)
+        applyLockFilter(candidateList)
     }
 
     /**
      * 動態規劃 (DP / Viterbi) 全域最佳分詞演算法
-     * 取代傳統脆弱的貪婪匹配，以全域最優詞頻分數求得長句最佳組合
+     * 當一口氣輸入較長句子時，從詞庫中尋找最合理的多詞組合並合成中文
      */
     private fun findBestSentence(keys: List<Int>): DictEntry? {
         val n = keys.size
@@ -265,8 +253,7 @@ class ZhuyinT9Engine(private val context: Context) {
                     val subKeys = keys.subList(j, i)
                     val node = trie.searchNode(subKeys)
                     if (node != null && node.exactEntries.isNotEmpty()) {
-                        val best = node.exactEntries.maxByOrNull { it.weight }!!
-                        // 依詞長度與權重綜合評分，優先偏好較完整的詞彙以避免過度碎詞
+                        val best = node.exactEntries.maxByOrNull { it.weight + userDict.getBoost(it.word) }!!
                         val lengthMultiplier = Math.pow(len.toDouble(), 1.25)
                         val score = dp[j] + Math.log(maxOf(best.weight.toDouble(), 10.0)) * lengthMultiplier
                         if (score > dp[i]) {
@@ -295,40 +282,29 @@ class ZhuyinT9Engine(private val context: Context) {
         zhuyins.reverse()
 
         if (words.size > 1) {
-            return DictEntry(words.joinToString(""), zhuyins.joinToString(""), 100000000)
+            return DictEntry(words.joinToString(""), zhuyins.joinToString(""), 100_000_000)
         }
         return null
     }
 
-    private fun recalculateCandidatesOnly(rawResults: List<DictEntry>? = null) {
-        val allResults = rawResults ?: trie.search(currentKeys)
+    private fun applyLockFilter(baseList: List<DictEntry>) {
         val locked = lockedZhuyinCombo
-
-        // 按聲調過濾：若使用者已選定聲調，只顯示含該聲調的候選詞
-        val toneFiltered = if (currentToneIndex > 0) {
-            val expectedTone = TONE_SYMBOLS[currentToneIndex]
-            val filtered = allResults.filter { entry -> entry.zhuyin.contains(expectedTone) }
-            if (filtered.isNotEmpty()) filtered else allResults
-        } else {
-            allResults
-        }
-
-        // 結合個人化動態權重加成（越常選越前排）進行排序
-        val rankedResults = toneFiltered.sortedByDescending { entry ->
-            entry.weight + userDict.getBoost(entry.word)
-        }
-
         if (locked != null) {
-            val filtered = rankedResults.filter { entry ->
-                val clean = entry.zhuyin.filter { it !in "ˇˋˊ˙" }
-                clean.startsWith(locked.filter { it !in "ˇˋˊ˙" })
+            val cleanLock = locked.filter { it !in "ˇˋˊ˙" }
+            val filtered = baseList.filter { entry ->
+                entry.zhuyin.filter { it !in "ˇˋˊ˙" }.startsWith(cleanLock)
             }
-            cachedCandidates = if (filtered.isNotEmpty()) filtered else rankedResults
+            cachedCandidates = if (filtered.isNotEmpty()) filtered else baseList
             return
         }
-
-        cachedCandidates = rankedResults
+        cachedCandidates = baseList
     }
+
+    private fun recalculateCandidatesOnly() {
+        recalculate()
+    }
+
+    // ───────── 對外查詢 API ─────────
 
     fun getPossibleZhuyinCombinations(): List<String> = cachedZhuyinCombos
 
@@ -336,9 +312,43 @@ class ZhuyinT9Engine(private val context: Context) {
 
     fun getTopComposingWord(): String {
         val candidates = getCandidates()
-        if (candidates.isNotEmpty()) {
-            return candidates.first().word
-        }
+        if (candidates.isNotEmpty()) return candidates.first().word
         return getPossibleZhuyinCombinations().firstOrNull() ?: ""
+    }
+
+    /**
+     * 接續詞預測（聯想詞）
+     * 100% 基於 libchewing 官方 16 萬詞庫在開機載入時建置的真實繁體詞頻索引，零硬編碼，零磁碟重複讀取！
+     */
+    fun getNextWordPredictions(word: String): List<DictEntry> {
+        if (word.isEmpty()) return emptyList()
+
+        val rankList = { list: List<DictEntry> ->
+            list.sortedByDescending { it.weight + userDict.getBoost(it.word) }.take(10)
+        }
+
+        // 1. 完全匹配剛上屏詞彙
+        val exactList = nextWordMap[word]
+        if (!exactList.isNullOrEmpty()) {
+            return rankList(exactList)
+        }
+
+        // 2. 結尾 2 字匹配（如選了長詞，取末尾詞接續）
+        if (word.length >= 2) {
+            val suffix2 = word.takeLast(2)
+            val list2 = nextWordMap[suffix2]
+            if (!list2.isNullOrEmpty()) {
+                return rankList(list2)
+            }
+        }
+
+        // 3. 結尾單字匹配
+        val suffix1 = word.takeLast(1)
+        val list1 = nextWordMap[suffix1]
+        if (!list1.isNullOrEmpty()) {
+            return rankList(list1)
+        }
+
+        return emptyList()
     }
 }
