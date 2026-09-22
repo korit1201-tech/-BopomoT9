@@ -115,7 +115,13 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     override fun onCreate() {
         super.onCreate()
-        engine = ZhuyinT9Engine(this)
+        engine = ZhuyinT9Engine(this).apply {
+            onDictionaryLoadedListener = {
+                if (hasComposing()) {
+                    refreshUI(getCandidates())
+                }
+            }
+        }
         vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
             vibratorManager?.defaultVibrator

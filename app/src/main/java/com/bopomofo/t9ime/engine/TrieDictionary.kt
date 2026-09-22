@@ -21,21 +21,24 @@ class TrieDictionary {
     val root = TrieNode()
 
     fun insert(entry: DictEntry) {
-        val noToneSeqs = KeyMapping.getTolerantSequences(entry.zhuyin, ignoreTones = true)
-        for ((index, seq) in noToneSeqs.withIndex()) {
-            if (seq.isNotEmpty()) {
-                val weightFactor = if (index == 0) 1.0 else 0.55
-                val adjustedEntry = if (index == 0) entry else DictEntry(entry.word, entry.zhuyin, (entry.weight * weightFactor).toInt())
-                insertSequence(seq, adjustedEntry)
-            }
+        val seqNoTone = KeyMapping.getSequence(entry.zhuyin, ignoreTones = true)
+        if (seqNoTone.isNotEmpty()) {
+            insertSequence(seqNoTone, entry)
         }
 
-        val fullSeqs = KeyMapping.getTolerantSequences(entry.zhuyin, ignoreTones = false)
-        for ((index, seq) in fullSeqs.withIndex()) {
-            if (seq.isNotEmpty() && !noToneSeqs.contains(seq)) {
-                val weightFactor = if (index == 0) 1.0 else 0.55
-                val adjustedEntry = if (index == 0) entry else DictEntry(entry.word, entry.zhuyin, (entry.weight * weightFactor).toInt())
-                insertSequence(seq, adjustedEntry)
+        val seqWithTone = KeyMapping.getSequence(entry.zhuyin, ignoreTones = false)
+        if (seqWithTone.isNotEmpty() && seqWithTone != seqNoTone) {
+            insertSequence(seqWithTone, entry)
+        }
+
+        // 僅對常用詞彙（詞長 <= 3 且 weight >= 60）進行跨鍵位容錯索引（避免 18 萬詞全面展開造成記憶體爆炸與 OOM）
+        if (entry.word.length <= 3 && entry.weight >= 60) {
+            val altSeqs = KeyMapping.getCrossKeyTolerantSequences(entry.zhuyin)
+            for (altSeq in altSeqs) {
+                if (altSeq != seqNoTone && altSeq != seqWithTone) {
+                    val adjustedEntry = DictEntry(entry.word, entry.zhuyin, (entry.weight * 0.55).toInt())
+                    insertSequence(altSeq, adjustedEntry)
+                }
             }
         }
     }

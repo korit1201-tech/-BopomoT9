@@ -143,4 +143,26 @@ object KeyMapping {
 
         return results
     }
+
+    /**
+     * 跨鍵位容錯：只針對 9 鍵中鍵碼真正不同的發音混淆（ㄢ Key 3 <-> ㄤ Key 9, ㄣ Key 6 <-> ㄥ Key 12）
+     * 產生容錯鍵序，避免同鍵位（如 ㄓ/ㄗ 均為 Key 3）的重複替換造成記憶體浪費與 OOM
+     */
+    fun getCrossKeyTolerantSequences(zhuyin: String): List<List<Int>> {
+        val results = mutableListOf<List<Int>>()
+        val crossReplacements = listOf(
+            "ㄣ" to "ㄥ", "ㄥ" to "ㄣ",
+            "ㄢ" to "ㄤ", "ㄤ" to "ㄢ"
+        )
+        for ((from, to) in crossReplacements) {
+            if (zhuyin.contains(from)) {
+                val alt = zhuyin.replace(from, to)
+                val s1 = getSequence(alt, ignoreTones = true)
+                if (s1.isNotEmpty() && !results.contains(s1)) results.add(s1)
+                val s2 = getSequence(alt, ignoreTones = false)
+                if (s2.isNotEmpty() && !results.contains(s2)) results.add(s2)
+            }
+        }
+        return results
+    }
 }

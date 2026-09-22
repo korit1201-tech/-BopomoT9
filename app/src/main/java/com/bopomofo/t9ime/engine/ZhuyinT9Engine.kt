@@ -1,6 +1,8 @@
 package com.bopomofo.t9ime.engine
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
@@ -11,10 +13,12 @@ import java.io.InputStreamReader
  * - 完全依賴 libchewing 的頻率權重排序，不做自訂預測邏輯
  * - Trie 前綴樹查詢 + 個人化使用頻率加權（UserDictionary）
  * - 零韻母容錯已在 KeyMapping.getTolerantSequences() 處理
+ * - 字典非同步背景極速載入，主線程 0 阻塞秒開鍵盤
  */
 class ZhuyinT9Engine(private val context: Context) {
 
-    private val trie = TrieDictionary()
+    @Volatile
+    private var trie = TrieDictionary()
     private var currentKeys = mutableListOf<Int>()
     private var currentToneIndex = 0
 
@@ -23,67 +27,100 @@ class ZhuyinT9Engine(private val context: Context) {
     private var lockedZhuyinCombo: String? = null
 
     private val userDict = UserDictionaryManager.getInstance(context)
-    private val nextWordMap = mutableMapOf<String, MutableList<DictEntry>>()
+    @Volatile
+    private var nextWordMap = mutableMapOf<String, MutableList<DictEntry>>()
+
+    @Volatile
+    var isDictionaryLoaded = false
+        private set
+
+    var onDictionaryLoadedListener: (() -> Unit)? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
         val TONE_SYMBOLS = listOf(' ', 'ˇ', 'ˋ', 'ˊ', '˙')
     }
 
     init {
-        loadDictionary()
-        loadUserDictionaryEntries()
+        loadUserDictionaryEntries(trie)
         userDict.onDictionaryChangedListener = {
-            loadUserDictionaryEntries()
+            loadUserDictionaryEntries(trie)
             if (currentKeys.isNotEmpty()) {
                 recalculate()
             }
         }
+        startAsyncDictionaryLoading()
     }
 
-    private fun loadUserDictionaryEntries() {
+    private fun startAsyncDictionaryLoading() {
+        Thread({
+            val newTrie = TrieDictionary()
+            val newNextWordMap = mutableMapOf<String, MutableList<DictEntry>>()
+            loadDictionaryInternal(newTrie, newNextWordMap)
+            loadUserDictionaryEntries(newTrie)
+
+            mainHandler.post {
+                trie = newTrie
+                nextWordMap = newNextWordMap
+                isDictionaryLoaded = true
+                if (currentKeys.isNotEmpty()) {
+                    recalculate()
+                }
+                onDictionaryLoadedListener?.invoke()
+            }
+        }, "ZhuyinT9DictLoader").start()
+    }
+
+    private fun loadUserDictionaryEntries(targetTrie: TrieDictionary) {
         val userEntries = userDict.getAllEntries()
         for (u in userEntries) {
             if (u.zhuyin.isNotEmpty()) {
                 // 使用者選過的詞給予高優先權，確保出現在候選詞中
                 val weight = 5_000_000 + minOf(u.count * 6_000_000, 100_000_000)
-                trie.insert(DictEntry(u.word, u.zhuyin, weight))
+                targetTrie.insert(DictEntry(u.word, u.zhuyin, weight))
             }
         }
     }
 
-    private fun addNextWord(prefix: String, next: String, weight: Int) {
-        val list = nextWordMap.getOrPut(prefix) { ArrayList(8) }
-        if (list.size < 12 && list.none { it.word == next }) {
-            list.add(DictEntry(next, "", weight))
-        }
-    }
-
-    private fun loadDictionary() {
+    private fun loadDictionaryInternal(
+        targetTrie: TrieDictionary,
+        targetNextWordMap: MutableMap<String, MutableList<DictEntry>>
+    ) {
+        val nextWordTrack = mutableMapOf<String, HashSet<String>>()
         try {
             context.assets.open("dict_tw.txt").use { inputStream ->
-                BufferedReader(InputStreamReader(inputStream)).useLines { lines ->
+                BufferedReader(InputStreamReader(inputStream), 65536).useLines { lines ->
                     for (line in lines) {
-                        val parts = line.split("\t")
-                        if (parts.size >= 3) {
-                            val word   = parts[0]
-                            val zhuyin = parts[1]
-                            val weight = parts[2].toIntOrNull() ?: 100
-                            trie.insert(DictEntry(word, zhuyin, weight))
+                        val tab1 = line.indexOf('\t')
+                        if (tab1 == -1) continue
+                        val tab2 = line.indexOf('\t', tab1 + 1)
+                        if (tab2 == -1) continue
 
-                            // 單次讀取時一併從 libchewing 詞庫構建接續聯想詞庫，絕不重複讀檔
-                            if (word.length in 2..4 && weight >= 10) {
-                                when (word.length) {
-                                    2 -> {
-                                        addNextWord(word.substring(0, 1), word.substring(1), weight)
-                                    }
-                                    3 -> {
-                                        addNextWord(word.substring(0, 1), word.substring(1), weight)
-                                        addNextWord(word.substring(0, 2), word.substring(2), weight)
-                                    }
-                                    4 -> {
-                                        addNextWord(word.substring(0, 2), word.substring(2), weight)
-                                        addNextWord(word.substring(0, 1), word.substring(1), weight)
-                                    }
+                        val word = line.substring(0, tab1)
+                        val zhuyin = line.substring(tab1 + 1, tab2)
+                        val weight = line.substring(tab2 + 1).toIntOrNull() ?: 100
+
+                        val entry = DictEntry(word, zhuyin, weight)
+                        targetTrie.insert(entry)
+
+                        // 單次讀取時構建高頻接續聯想詞庫（weight >= 25 且使用 HashSet 快速去重）
+                        if (word.length in 2..4 && weight >= 25) {
+                            val addNext = { p: String, n: String ->
+                                val set = nextWordTrack.getOrPut(p) { HashSet(8) }
+                                if (set.size < 10 && set.add(n)) {
+                                    val list = targetNextWordMap.getOrPut(p) { ArrayList(8) }
+                                    list.add(DictEntry(n, "", weight))
+                                }
+                            }
+                            when (word.length) {
+                                2 -> addNext(word.substring(0, 1), word.substring(1))
+                                3 -> {
+                                    addNext(word.substring(0, 1), word.substring(1))
+                                    addNext(word.substring(0, 2), word.substring(2))
+                                }
+                                4 -> {
+                                    addNext(word.substring(0, 2), word.substring(2))
+                                    addNext(word.substring(0, 1), word.substring(1))
                                 }
                             }
                         }
@@ -91,7 +128,7 @@ class ZhuyinT9Engine(private val context: Context) {
                 }
             }
 
-            for ((_, list) in nextWordMap) {
+            for ((_, list) in targetNextWordMap) {
                 list.sortByDescending { it.weight }
             }
         } catch (e: Exception) {
@@ -309,6 +346,9 @@ class ZhuyinT9Engine(private val context: Context) {
     fun getPossibleZhuyinCombinations(): List<String> = cachedZhuyinCombos
 
     fun getCandidates(): List<DictEntry> = cachedCandidates
+
+    val currentCandidates: List<DictEntry>
+        get() = cachedCandidates
 
     fun getTopComposingWord(): String {
         val candidates = getCandidates()
