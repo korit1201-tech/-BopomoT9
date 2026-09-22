@@ -238,7 +238,7 @@
                 android:textSize="16sp" />
         </LinearLayout>
 
-        <!-- 區塊四：版本資訊與更新檢測 -->
+        <!-- 區塊四：版本資訊、作者與更新檢測 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -252,7 +252,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="🚀 版本資訊與線上更新"
+                android:text="🚀 關於與版本更新"
                 android:textColor="#212121"
                 android:textSize="16sp"
                 android:textStyle="bold" />
@@ -262,14 +262,34 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:text="目前安裝版本：v1.4.0"
+                android:text="目前版本：v1.4.1"
                 android:textColor="#424242"
                 android:textSize="14sp" />
 
             <TextView
+                android:id="@+id/tv_author_info"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
+                android:text="作者：korit1201-tech"
+                android:textColor="#616161"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/tv_github_repo_link"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="🌐 專案主頁：github.com/korit1201-tech/android-BOPOMOFO-t9"
+                android:textColor="#1976D2"
+                android:textSize="13sp"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
                 android:text="點擊手動比對 GitHub Releases 最新版本，發現新版可直接在應用內下載並安裝更新。"
                 android:textColor="#757575"
                 android:textSize="12sp" />
@@ -278,7 +298,7 @@
                 android:id="@+id/btn_check_update"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
+                android:layout_marginTop="10dp"
                 android:text="🔍 檢查 GitHub 新版本" />
         </LinearLayout>
 

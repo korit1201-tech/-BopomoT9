@@ -170,7 +170,15 @@ class MainActivity : AppCompatActivity() {
         val tvCurrentVer = findViewById<TextView>(R.id.tv_current_version)
         val btnCheck = findViewById<Button>(R.id.btn_check_update)
 
-        tvCurrentVer?.text = "目前安裝版本：v${BuildConfig.VERSION_NAME}"
+        tvCurrentVer?.text = "目前安裝版本：v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})"
+
+        val tvRepo = findViewById<TextView>(R.id.tv_github_repo_link)
+        tvRepo?.setOnClickListener {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/korit1201-tech/android-BOPOMOFO-t9"))
+                startActivity(intent)
+            } catch (_: Exception) {}
+        }
 
         btnCheck?.setOnClickListener {
             btnCheck.isEnabled = false

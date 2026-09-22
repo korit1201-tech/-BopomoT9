@@ -4,6 +4,20 @@
 
 ---
 
+## [v1.4.1] - 2026-09-23
+
+### 🎨 專屬全新 App Icon (App Icon Design)
+- **經典 2×2 大按鍵圖示**：依據真實鍵盤左上角四鍵（ㄅㄉㄚ／ㄍㄐㄞ／ㄆㄊㄛ／ㄎㄑㄟ）設計高質感圖示，生成全套 Android 規格圖示（mdpi、hdpi、xhdpi、xxhdpi、xxxhdpi 及圓形圖示 `ic_launcher_round`），擺脫系統預設小機器人。
+
+### 👤 作者資訊與專案主頁連結 (Author Info & Repository Link)
+- **設定頁面完整整合**：在設定頁面明確標註作者資訊（`korit1201-tech`）以及 GitHub 專案主頁連結，使用者點擊即可直接於瀏覽器開啟專案倉庫。
+- **詳細版本號識別**：設定頁面顯示詳細版號與建置代碼（`v1.4.1 (Build 7)`）。
+
+### 🚀 應用內線上檢查更新 (In-App GitHub Release Updater)
+- **一鍵下載與覆蓋安裝**：手動檢查 GitHub Releases 最新版本，背景自動下載並透過 `FileProvider` 喚起系統安裝器完成無縫更新。
+
+---
+
 ## [v1.4.0] - 2026-09-23
 
 ### 🧭 四向十字羅盤拖選手勢與視覺動畫 (Compass Drag-to-Select)
