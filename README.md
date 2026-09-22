@@ -4,8 +4,7 @@
 
 > **致敬與語料來源**：  
 > - 核心繁體中文詞庫全量採用開源知名 [chewing/libchewing-data](https://github.com/chewing/libchewing-data)（新酷音）官方維護之真實頻率語料庫。  
-> - 12 鍵注音鍵盤手勢佈局概念參考 [Rizumu85/fcitx5-android-t9-phone](https://github.com/Rizumu85/fcitx5-android-t9-phone)。  
-> - 拼寫容錯代數與聲調輪替機制參考 [SSARCandy/rime-bopomofo-t9](https://github.com/SSARCandy/rime-bopomofo-t9)。  
+> - 12 鍵注音鍵盤佈局與手勢概念參考 [Rizumu85/fcitx5-android-t9-phone](https://github.com/Rizumu85/fcitx5-android-t9-phone)。  
 > 本專案採用純原生 Android Kotlin 開發，具備獨立的前綴樹（Trie）注音斷詞與動態規劃 (DP) 全域分詞引擎。
 
 ---
