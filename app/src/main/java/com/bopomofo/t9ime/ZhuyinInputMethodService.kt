@@ -810,6 +810,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "123"
                 btnLangToggle.text = "中"
+                btnLangToggle.setOnTouchListener(null) // 恢復語言切換 click 行為
                 btnSpaceSwipe.text = when (chineseSubMode) {
                     ChineseInputSubMode.TRADITIONAL -> "繁"
                     ChineseInputSubMode.SIMPLIFIED -> "簡"
@@ -824,10 +825,30 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.VISIBLE
                 btnMode123.text = "123"
-                btnLangToggle.text = "中"
                 btnSpaceSwipe.text = "手"
                 btnQwertyToggle.visibility = View.GONE
                 if (::btnSymAt.isInitialized) btnSymAt.visibility = View.VISIBLE
+                // 手寫模式下「中/英」位置改為退格鍵
+                btnLangToggle.text = "⌫"
+                btnLangToggle.setOnTouchListener { v, event ->
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            v.isPressed = true
+                            triggerHapticFeedback()
+                            performBackspace()
+                            isRepeatingBackspace = true
+                            repeatHandler.postDelayed(backspaceRunnable, INITIAL_REPEAT_DELAY)
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            v.isPressed = false
+                            isRepeatingBackspace = false
+                            repeatHandler.removeCallbacks(backspaceRunnable)
+                            true
+                        }
+                        else -> false
+                    }
+                }
             }
             KeyboardMode.NUMBER_SYM -> {
                 layout12Key.visibility = View.VISIBLE
@@ -835,6 +856,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "注音"
                 btnLangToggle.text = "中"
+                btnLangToggle.setOnTouchListener(null) // 恢復語言切換 click 行為
                 btnSpaceSwipe.text = "空格"
                 btnQwertyToggle.visibility = View.GONE
                 update12KeyLabelsNumbers()
@@ -846,6 +868,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "123"
                 btnLangToggle.text = "EN"
+                btnLangToggle.setOnTouchListener(null) // 恢復語言切換 click 行為
                 btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
                 btnQwertyToggle.visibility = View.VISIBLE
                 btnQwertyToggle.text = "26鍵"
@@ -858,6 +881,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "123"
                 btnLangToggle.text = "EN"
+                btnLangToggle.setOnTouchListener(null) // 恢復語言切換 click 行為
                 btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
                 btnQwertyToggle.visibility = View.VISIBLE
                 btnQwertyToggle.text = "9鍵"
