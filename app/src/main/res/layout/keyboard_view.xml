@@ -372,6 +372,14 @@
             android:orientation="vertical"
             android:visibility="gone">
 
+            <!-- QWERTY 常用符號列: - + * / @ # $ % ^ & -->
+            <LinearLayout
+                android:id="@+id/qwerty_row_symbols"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="0.85"
+                android:orientation="horizontal" />
+
             <!-- QWERTY Row 1: Q W E R T Y U I O P -->
             <LinearLayout
                 android:id="@+id/qwerty_row_1"

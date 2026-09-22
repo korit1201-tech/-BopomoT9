@@ -434,25 +434,33 @@ class ZhuyinInputMethodService : InputMethodService() {
      * 26 鍵英文全鍵盤 (QWERTY Layout - 包含 Shift大小寫切換、退格鍵、逗點、句號)
      */
     private fun setupQwertyLayout(root: View) {
+        val rowSymbols = root.findViewById<LinearLayout>(R.id.qwerty_row_symbols)
         val row1 = root.findViewById<LinearLayout>(R.id.qwerty_row_1)
         val row2 = root.findViewById<LinearLayout>(R.id.qwerty_row_2)
         val row3 = root.findViewById<LinearLayout>(R.id.qwerty_row_3)
 
-        val letters1 = listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p")
-        val letters2 = listOf("a", "s", "d", "f", "g", "h", "j", "k", "l")
-        val letters3 = listOf("z", "x", "c", "v", "b", "n", "m")
-
-        row1.removeAllViews()
-        for (ch in letters1) {
-            row1.addView(createQwertyKey(ch, 1f))
+        // 0. 常用符號列 (Direct Symbol Row): - + * / @ # $ % ^ &
+        val symbols = listOf("-", "+", "*", "/", "@", "#", "$", "%", "^", "&")
+        rowSymbols?.removeAllViews()
+        for (sym in symbols) {
+            rowSymbols?.addView(createQwertySymbolKey(sym, 1f))
         }
 
-        row2.removeAllViews()
-        for (ch in letters2) {
-            row2.addView(createQwertyKey(ch, 1f))
+        val letters1 = listOf("q" to "1", "w" to "2", "e" to "3", "r" to "4", "t" to "5", "y" to "6", "u" to "7", "i" to "8", "o" to "9", "p" to "0")
+        val letters2 = listOf("a" to "!", "s" to "?", "d" to "(", "f" to ")", "g" to "[", "h" to "]", "j" to "{", "k" to "}", "l" to "\"")
+        val letters3 = listOf("z" to "~", "x" to "\\", "c" to "'", "v" to "<", "b" to ">", "n" to ";", "m" to ":")
+
+        row1?.removeAllViews()
+        for ((ch, num) in letters1) {
+            row1?.addView(createQwertyKey(ch, 1f, num))
         }
 
-        row3.removeAllViews()
+        row2?.removeAllViews()
+        for ((ch, sym) in letters2) {
+            row2?.addView(createQwertyKey(ch, 1f, sym))
+        }
+
+        row3?.removeAllViews()
 
         // 1. Shift 大小寫切換鍵 (左側)
         val btnShift = Button(this).apply {
@@ -470,11 +478,11 @@ class ZhuyinInputMethodService : InputMethodService() {
                 updateQwertyKeysText()
             }
         }
-        row3.addView(btnShift)
+        row3?.addView(btnShift)
 
         // 2. 字母鍵 Z X C V B N M
-        for (ch in letters3) {
-            row3.addView(createQwertyKey(ch, 1f))
+        for ((ch, sym) in letters3) {
+            row3?.addView(createQwertyKey(ch, 1f, sym))
         }
 
         // 3. 26 鍵專屬退格鍵 (右側，支援點按與長按連續退位)
@@ -506,10 +514,58 @@ class ZhuyinInputMethodService : InputMethodService() {
                 }
             }
         }
-        row3.addView(btnQwertyDel)
+        row3?.addView(btnQwertyDel)
     }
 
-    private fun createQwertyKey(text: String, weight: Float): Button {
+    private fun createQwertySymbolKey(sym: String, weight: Float): Button {
+        return Button(this).apply {
+            text = sym
+            textSize = 16f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
+                setMargins(2, 2, 2, 2)
+            }
+            layoutParams = params
+            setOnClickListener {
+                triggerHapticFeedback()
+                commitTextDirectly(sym)
+            }
+
+            // 長按彈出關聯拓展符號選單
+            val related = when (sym) {
+                "-" -> listOf("_", "~", "–", "—")
+                "+" -> listOf("=", "±")
+                "*" -> listOf("×", "•", "°")
+                "/" -> listOf("\\", "|")
+                "@" -> listOf("©", "®")
+                "#" -> listOf("№")
+                "$" -> listOf("¥", "€", "£", "¢", "₩")
+                "%" -> listOf("‰")
+                "^" -> listOf("<", ">", "≤", "≥")
+                "&" -> listOf("§", "¶")
+                else -> emptyList()
+            }
+            if (related.isNotEmpty()) {
+                setOnLongClickListener {
+                    triggerHapticFeedback()
+                    val popup = android.widget.PopupMenu(this@ZhuyinInputMethodService, this)
+                    for ((index, item) in related.withIndex()) {
+                        popup.menu.add(0, index, index, item)
+                    }
+                    popup.setOnMenuItemClickListener { menuItem ->
+                        triggerHapticFeedback()
+                        commitTextDirectly(related[menuItem.itemId])
+                        true
+                    }
+                    popup.show()
+                    true
+                }
+            }
+        }
+    }
+
+    private fun createQwertyKey(text: String, weight: Float, longClickChar: String? = null): Button {
         return Button(this).apply {
             this.text = if (isCapsLock) text.uppercase() else text.lowercase()
             textSize = 18f
@@ -523,6 +579,13 @@ class ZhuyinInputMethodService : InputMethodService() {
                 triggerHapticFeedback()
                 val letterToCommit = if (isCapsLock) text.uppercase() else text.lowercase()
                 commitTextDirectly(letterToCommit)
+            }
+            if (longClickChar != null) {
+                setOnLongClickListener {
+                    triggerHapticFeedback()
+                    commitTextDirectly(longClickChar)
+                    true
+                }
             }
         }
     }
