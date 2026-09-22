@@ -439,8 +439,8 @@ class ZhuyinInputMethodService : InputMethodService() {
         val row2 = root.findViewById<LinearLayout>(R.id.qwerty_row_2)
         val row3 = root.findViewById<LinearLayout>(R.id.qwerty_row_3)
 
-        // 0. 常用符號列 (Direct Symbol Row): - + * / @ # $ % ^ &
-        val symbols = listOf("-", "+", "*", "/", "@", "#", "$", "%", "^", "&")
+        // 0. 常用符號列 (Direct Symbol Row): + - * / = ( ) @ _ &
+        val symbols = listOf("+", "-", "*", "/", "=", "(", ")", "@", "_", "&")
         rowSymbols?.removeAllViews()
         for (sym in symbols) {
             rowSymbols?.addView(createQwertySymbolKey(sym, 1f))
@@ -534,16 +534,16 @@ class ZhuyinInputMethodService : InputMethodService() {
 
             // 長按彈出關聯拓展符號選單
             val related = when (sym) {
+                "+" -> listOf("=", "±", "++")
                 "-" -> listOf("_", "~", "–", "—")
-                "+" -> listOf("=", "±")
-                "*" -> listOf("×", "•", "°")
-                "/" -> listOf("\\", "|")
-                "@" -> listOf("©", "®")
-                "#" -> listOf("№")
-                "$" -> listOf("¥", "€", "£", "¢", "₩")
-                "%" -> listOf("‰")
-                "^" -> listOf("<", ">", "≤", "≥")
-                "&" -> listOf("§", "¶")
+                "*" -> listOf("×", "•", "°", "^")
+                "/" -> listOf("÷", "\\", "|")
+                "=" -> listOf("≠", "≈", "≤", "≥")
+                "(" -> listOf("[", "{", "<", "（", "【")
+                ")" -> listOf("]", "}", ">", "）", "】")
+                "@" -> listOf("#", "$", "©")
+                "_" -> listOf("-", "—")
+                "&" -> listOf("%", "$", "§")
                 else -> emptyList()
             }
             if (related.isNotEmpty()) {
@@ -595,38 +595,26 @@ class ZhuyinInputMethodService : InputMethodService() {
         setupQwertyLayout(root)
     }
 
-    private lateinit var btnSymQuestion: Button
-    private lateinit var btnSymExclamation: Button
-    private lateinit var btnSymEllipsis: Button
-    private lateinit var btnSymColon: Button
+    private lateinit var btnSym1: Button
+    private lateinit var btnSym2: Button
+    private lateinit var btnSym3: Button
+    private lateinit var btnSym4: Button
+    private lateinit var btnSym5: Button
     private lateinit var btnComma: Button
     private lateinit var btnPeriod: Button
     private lateinit var btnSymAt: Button
 
     private fun setupSideActions(root: View) {
-        btnSymQuestion = root.findViewById(R.id.btn_sym_question)
-        btnSymExclamation = root.findViewById(R.id.btn_sym_exclamation)
-        btnSymEllipsis = root.findViewById(R.id.btn_sym_ellipsis)
-        btnSymColon = root.findViewById(R.id.btn_sym_colon)
+        btnSym1 = root.findViewById(R.id.btn_sym_1)
+        btnSym2 = root.findViewById(R.id.btn_sym_2)
+        btnSym3 = root.findViewById(R.id.btn_sym_3)
+        btnSym4 = root.findViewById(R.id.btn_sym_4)
+        btnSym5 = root.findViewById(R.id.btn_sym_5)
         btnSymAt = root.findViewById(R.id.btn_sym_at)
 
-        btnSymQuestion.setOnClickListener {
-            triggerHapticFeedback()
-            commitSymbol(if (isTraditionalMode()) "？" else "?")
-        }
-        btnSymExclamation.setOnClickListener {
-            triggerHapticFeedback()
-            commitSymbol(if (isTraditionalMode()) "！" else "!")
-        }
-        btnSymEllipsis.setOnClickListener {
-            triggerHapticFeedback()
-            commitSymbol(if (isTraditionalMode()) "……" else "...")
-        }
-        btnSymColon.setOnClickListener {
-            triggerHapticFeedback()
-            commitSymbol(if (isTraditionalMode()) "：" else ":")
-        }
-        btnSymAt.setOnClickListener {
+        updateSymbolsDisplay()
+
+        btnSymAt?.setOnClickListener {
             triggerHapticFeedback()
             commitSymbol(if (isTraditionalMode()) "＠" else "@")
         }
@@ -665,22 +653,6 @@ class ZhuyinInputMethodService : InputMethodService() {
         return currentMode == KeyboardMode.ZHUYIN && !isSimplified
     }
 
-    private fun updateSymbolsDisplay() {
-        if (::btnSymQuestion.isInitialized) {
-            val isTrad = isTraditionalMode()
-            btnSymQuestion.text = if (isTrad) "？" else "?"
-            btnSymExclamation.text = if (isTrad) "！" else "!"
-            btnSymEllipsis.text = if (isTrad) "……" else "..."
-            btnSymColon.text = if (isTrad) "：" else ":"
-            btnSymAt.text = if (isTrad) "＠" else "@"
-        }
-        if (::btnComma.isInitialized) {
-            btnComma.text = if (isTraditionalMode()) "，" else ","
-        }
-        if (::btnPeriod.isInitialized) {
-            btnPeriod.text = if (isTraditionalMode()) "。" else "."
-        }
-    }
 
     private fun setupBottomActions(root: View) {
         btnComma = root.findViewById(R.id.btn_comma)
@@ -866,6 +838,71 @@ class ZhuyinInputMethodService : InputMethodService() {
         updateSymbolsDisplay()
     }
 
+    private fun updateSymbolsDisplay() {
+        if (::btnComma.isInitialized) {
+            btnComma.text = if (isTraditionalMode()) "，" else ","
+        }
+        if (::btnPeriod.isInitialized) {
+            btnPeriod.text = if (isTraditionalMode()) "。" else "."
+        }
+
+        if (!::btnSym1.isInitialized) return
+
+        when (currentMode) {
+            KeyboardMode.NUMBER_SYM -> {
+                // 數字模式：左側直出「+ - * / =」
+                setupSymbolButton(btnSym1, "+", listOf("±", "++"))
+                setupSymbolButton(btnSym2, "-", listOf("_", "–", "—"))
+                setupSymbolButton(btnSym3, "*", listOf("×", "•", "°"))
+                setupSymbolButton(btnSym4, "/", listOf("÷", "\\", "|"))
+                setupSymbolButton(btnSym5, "=", listOf("≠", "≈", "≤", "≥"))
+            }
+            KeyboardMode.ZHUYIN -> {
+                // 注音模式：常用全形標點
+                setupSymbolButton(btnSym1, "？", listOf("?", "¿"))
+                setupSymbolButton(btnSym2, "！", listOf("!", "¡"))
+                setupSymbolButton(btnSym3, "……", listOf("…", "—"))
+                setupSymbolButton(btnSym4, "：", listOf("；", "『", "』"))
+                setupSymbolButton(btnSym5, "～", listOf("·", "《", "》"))
+            }
+            KeyboardMode.ENGLISH_T9 -> {
+                // 9鍵英文模式：半形標點
+                setupSymbolButton(btnSym1, "?", listOf("¿"))
+                setupSymbolButton(btnSym2, "!", listOf("¡"))
+                setupSymbolButton(btnSym3, "...", listOf("…", "—"))
+                setupSymbolButton(btnSym4, ":", listOf(";", "\""))
+                setupSymbolButton(btnSym5, "@", listOf("#", "$"))
+            }
+            else -> {}
+        }
+    }
+
+    private fun setupSymbolButton(btn: Button, primary: String, related: List<String>) {
+        btn.text = primary
+        btn.setOnClickListener {
+            triggerHapticFeedback()
+            commitSymbol(primary)
+        }
+        if (related.isNotEmpty()) {
+            btn.setOnLongClickListener {
+                triggerHapticFeedback()
+                val popup = android.widget.PopupMenu(this, btn)
+                for ((index, item) in related.withIndex()) {
+                    popup.menu.add(0, index, index, item)
+                }
+                popup.setOnMenuItemClickListener { menuItem ->
+                    triggerHapticFeedback()
+                    commitSymbol(related[menuItem.itemId])
+                    true
+                }
+                popup.show()
+                true
+            }
+        } else {
+            btn.setOnLongClickListener(null)
+        }
+    }
+
     private fun update12KeyLabelsZhuyin() {
         set12KeyText(1, "ㄅ ㄉ ㄚ")
         set12KeyText(2, "ㄍ ㄐ ㄞ")
@@ -891,7 +928,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         set12KeyText(7, "7")
         set12KeyText(8, "8")
         set12KeyText(9, "9")
-        set12KeyText(10, "*")
+        set12KeyText(10, ".")
         set12KeyText(11, "0")
         set12KeyText(12, "#")
     }
@@ -929,7 +966,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             1 -> "1"; 2 -> "2"; 3 -> "3"
             4 -> "4"; 5 -> "5"; 6 -> "6"
             7 -> "7"; 8 -> "8"; 9 -> "9"
-            10 -> "*"; 11 -> "0"; 12 -> "#"
+            10 -> "."; 11 -> "0"; 12 -> "#"
             else -> ""
         }
     }
