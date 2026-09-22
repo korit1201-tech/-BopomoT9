@@ -37,11 +37,21 @@ class ZhuyinInputMethodService : InputMethodService() {
         ZHUYIN,         // 12 鍵注音
         NUMBER_SYM,     // 12 鍵數字/符號
         ENGLISH_T9,     // 12 鍵英文 (T9 9-Key Multi-tap)
-        ENGLISH_QWERTY  // 26 鍵英文全鍵盤
+        ENGLISH_QWERTY, // 26 鍵英文全鍵盤
+        HANDWRITING     // 手寫輸入
+    }
+
+    enum class ChineseInputSubMode {
+        TRADITIONAL,    // 繁體
+        SIMPLIFIED,     // 簡體
+        HANDWRITING     // 手寫
     }
 
     private var currentMode = KeyboardMode.ZHUYIN
-    private var isSimplified = false // 繁體 / 簡體 切換狀態
+    private var chineseSubMode = ChineseInputSubMode.TRADITIONAL
+    private val isSimplified: Boolean
+        get() = chineseSubMode == ChineseInputSubMode.SIMPLIFIED
+
     private var isCapsLock = false   // 大小寫切換狀態
     private var lastCommittedWord: String? = null
 
@@ -59,8 +69,11 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     private lateinit var layout12Key: LinearLayout
     private lateinit var layoutQwerty: LinearLayout
-    private var rootView: View? = null
+    private lateinit var layoutHandwriting: FrameLayout
+    private lateinit var handwritingCanvas: com.bopomofo.t9ime.ui.HandwritingCanvasView
+    private var handwritingRecognizer: com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer? = null
 
+    private var rootView: View? = null
     private var vibrator: Vibrator? = null
 
     private lateinit var btnMode123: Button
@@ -140,6 +153,24 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         layout12Key = root.findViewById(R.id.layout_12key)
         layoutQwerty = root.findViewById(R.id.layout_qwerty)
+        layoutHandwriting = root.findViewById(R.id.layout_handwriting)
+        handwritingCanvas = root.findViewById(R.id.handwriting_canvas)
+
+        handwritingCanvas.onRecognizeListener = { strokes ->
+            if (handwritingRecognizer == null) {
+                handwritingRecognizer = com.bopomofo.t9ime.engine.OfflineHandwritingRecognizer(emptyList())
+            }
+            val candidates = handwritingRecognizer?.recognize(strokes) ?: emptyList()
+            if (candidates.isNotEmpty()) {
+                updateCandidateBar(candidates)
+            }
+        }
+
+        root.findViewById<Button>(R.id.btn_handwriting_clear)?.setOnClickListener {
+            triggerHapticFeedback()
+            handwritingCanvas.clearCanvas()
+            candidateContainer.removeAllViews()
+        }
 
         btnMode123 = root.findViewById(R.id.btn_mode_123)
         btnLangToggle = root.findViewById(R.id.btn_lang_toggle)
@@ -479,7 +510,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         btnLangToggle.setOnClickListener {
             triggerHapticFeedback()
             currentMode = when (currentMode) {
-                KeyboardMode.ZHUYIN, KeyboardMode.NUMBER_SYM -> KeyboardMode.ENGLISH_T9
+                KeyboardMode.ZHUYIN, KeyboardMode.NUMBER_SYM, KeyboardMode.HANDWRITING -> KeyboardMode.ENGLISH_T9
                 KeyboardMode.ENGLISH_T9, KeyboardMode.ENGLISH_QWERTY -> KeyboardMode.ZHUYIN
             }
             engine.clear()
@@ -520,9 +551,24 @@ class ZhuyinInputMethodService : InputMethodService() {
                     btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
                     updateKeyboardModeUI()
                 } else {
-                    // 中文模式下：滑動切換「繁 / 簡」！
-                    isSimplified = !isSimplified
-                    btnSpaceSwipe.text = if (isSimplified) "簡" else "繁"
+                    // 中文模式下：滑動依序輪替「繁」->「簡」->「手」！
+                    chineseSubMode = when (chineseSubMode) {
+                        ChineseInputSubMode.TRADITIONAL -> ChineseInputSubMode.SIMPLIFIED
+                        ChineseInputSubMode.SIMPLIFIED -> ChineseInputSubMode.HANDWRITING
+                        ChineseInputSubMode.HANDWRITING -> ChineseInputSubMode.TRADITIONAL
+                    }
+
+                    if (chineseSubMode == ChineseInputSubMode.HANDWRITING) {
+                        currentMode = KeyboardMode.HANDWRITING
+                        engine.clear()
+                        currentInputConnection?.setComposingText("", 1)
+                        if (::handwritingCanvas.isInitialized) {
+                            handwritingCanvas.clearCanvas()
+                        }
+                    } else {
+                        currentMode = KeyboardMode.ZHUYIN
+                    }
+
                     updateKeyboardModeUI()
                     if (engine.hasComposing()) {
                         refreshUI(engine.getCandidates())
@@ -551,15 +597,30 @@ class ZhuyinInputMethodService : InputMethodService() {
             KeyboardMode.ZHUYIN -> {
                 layout12Key.visibility = View.VISIBLE
                 layoutQwerty.visibility = View.GONE
+                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "123"
                 btnLangToggle.text = "中"
-                btnSpaceSwipe.text = if (isSimplified) "簡" else "繁"
+                btnSpaceSwipe.text = when (chineseSubMode) {
+                    ChineseInputSubMode.TRADITIONAL -> "繁"
+                    ChineseInputSubMode.SIMPLIFIED -> "簡"
+                    ChineseInputSubMode.HANDWRITING -> "手"
+                }
                 btnQwertyToggle.visibility = View.GONE
                 update12KeyLabelsZhuyin()
+            }
+            KeyboardMode.HANDWRITING -> {
+                layout12Key.visibility = View.GONE
+                layoutQwerty.visibility = View.GONE
+                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.VISIBLE
+                btnMode123.text = "123"
+                btnLangToggle.text = "中"
+                btnSpaceSwipe.text = "手"
+                btnQwertyToggle.visibility = View.GONE
             }
             KeyboardMode.NUMBER_SYM -> {
                 layout12Key.visibility = View.VISIBLE
                 layoutQwerty.visibility = View.GONE
+                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "注音"
                 btnLangToggle.text = "中"
                 btnSpaceSwipe.text = "空格"
@@ -569,6 +630,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             KeyboardMode.ENGLISH_T9 -> {
                 layout12Key.visibility = View.VISIBLE
                 layoutQwerty.visibility = View.GONE
+                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "123"
                 btnLangToggle.text = "EN"
                 btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
@@ -579,6 +641,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             KeyboardMode.ENGLISH_QWERTY -> {
                 layout12Key.visibility = View.GONE
                 layoutQwerty.visibility = View.VISIBLE
+                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "123"
                 btnLangToggle.text = "EN"
                 btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
@@ -825,7 +888,136 @@ class ZhuyinInputMethodService : InputMethodService() {
         lastCommittedWord = entry.word
         engine.clear()
         currentInputConnection?.setComposingText("", 1)
+        if (::handwritingCanvas.isInitialized) {
+            handwritingCanvas.clearCanvas()
+        }
         updateLeftZhuyinCombos()
         showNextWordPredictions(entry.word)
+    }
+
+    // 實體鍵盤大千注音鍵位映射表 (標準 PC 鍵盤注音符號對應)
+    private val DAQIAN_KEY_MAP = mapOf(
+        KeyEvent.KEYCODE_1 to 'ㄅ', KeyEvent.KEYCODE_Q to 'ㄆ', KeyEvent.KEYCODE_A to 'ㄇ', KeyEvent.KEYCODE_Z to 'ㄈ',
+        KeyEvent.KEYCODE_2 to 'ㄉ', KeyEvent.KEYCODE_W to 'ㄊ', KeyEvent.KEYCODE_S to 'ㄋ', KeyEvent.KEYCODE_X to 'ㄌ',
+        KeyEvent.KEYCODE_E to 'ㄍ', KeyEvent.KEYCODE_D to 'ㄎ', KeyEvent.KEYCODE_C to 'ㄏ',
+        KeyEvent.KEYCODE_R to 'ㄐ', KeyEvent.KEYCODE_F to 'ㄑ', KeyEvent.KEYCODE_V to 'ㄒ',
+        KeyEvent.KEYCODE_5 to 'ㄓ', KeyEvent.KEYCODE_T to 'ㄔ', KeyEvent.KEYCODE_G to 'ㄕ', KeyEvent.KEYCODE_B to 'ㄖ',
+        KeyEvent.KEYCODE_Y to 'ㄗ', KeyEvent.KEYCODE_H to 'ㄘ', KeyEvent.KEYCODE_N to 'ㄙ',
+        KeyEvent.KEYCODE_U to 'ㄧ', KeyEvent.KEYCODE_J to 'ㄨ', KeyEvent.KEYCODE_M to 'ㄩ',
+        KeyEvent.KEYCODE_8 to 'ㄚ', KeyEvent.KEYCODE_I to 'ㄛ', KeyEvent.KEYCODE_K to 'ㄜ', KeyEvent.KEYCODE_COMMA to 'ㄝ',
+        KeyEvent.KEYCODE_9 to 'ㄞ', KeyEvent.KEYCODE_O to 'ㄟ', KeyEvent.KEYCODE_L to 'ㄠ', KeyEvent.KEYCODE_PERIOD to 'ㄡ',
+        KeyEvent.KEYCODE_0 to 'ㄢ', KeyEvent.KEYCODE_P to 'ㄣ', KeyEvent.KEYCODE_SEMICOLON to 'ㄤ', KeyEvent.KEYCODE_SLASH to 'ㄦ',
+        // 聲調鍵 (3 4 6 7)
+        KeyEvent.KEYCODE_3 to 'ˇ', // 三聲
+        KeyEvent.KEYCODE_4 to 'ˋ', // 四聲
+        KeyEvent.KEYCODE_6 to 'ˊ', // 二聲
+        KeyEvent.KEYCODE_7 to '˙'  // 輕聲
+    )
+
+    private var isPhysicalShiftPressed = false
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // 1. Shift 鍵按下標記
+        if (keyCode == KeyEvent.KEYCODE_SHIFT_LEFT || keyCode == KeyEvent.KEYCODE_SHIFT_RIGHT) {
+            isPhysicalShiftPressed = true
+            return true
+        }
+
+        // 2. 組合鍵（如 Ctrl+C, Ctrl+V, Alt 等）直接放行交由系統處理
+        if (event.isCtrlPressed || event.isAltPressed) {
+            return super.onKeyDown(keyCode, event)
+        }
+
+        // 3. 英文模式下：實體鍵盤直接輸出字元
+        if (currentMode == KeyboardMode.ENGLISH_T9 || currentMode == KeyboardMode.ENGLISH_QWERTY) {
+            return super.onKeyDown(keyCode, event)
+        }
+
+        // 4. 注音模式下的實體鍵盤處理
+        if (currentMode == KeyboardMode.ZHUYIN) {
+            // A. Backspace 刪除
+            if (keyCode == KeyEvent.KEYCODE_DEL) {
+                if (engine.hasComposing()) {
+                    performBackspace()
+                    return true
+                }
+                return super.onKeyDown(keyCode, event)
+            }
+
+            // B. Space 空白鍵
+            if (keyCode == KeyEvent.KEYCODE_SPACE) {
+                if (engine.hasComposing()) {
+                    val candidates = engine.getCandidates()
+                    if (candidates.isNotEmpty()) {
+                        selectCandidate(candidates.first())
+                    } else {
+                        val top = engine.getTopComposingWord()
+                        commitProcessedText(top)
+                        engine.clear()
+                        currentInputConnection?.setComposingText("", 1)
+                    }
+                    return true
+                } else {
+                    commitTextDirectly(" ")
+                    return true
+                }
+            }
+
+            // C. Enter 鍵確認直接送出當前注音
+            if (keyCode == KeyEvent.KEYCODE_ENTER) {
+                if (engine.hasComposing()) {
+                    val top = engine.getTopComposingWord()
+                    commitProcessedText(top)
+                    engine.clear()
+                    currentInputConnection?.setComposingText("", 1)
+                    return true
+                }
+                return super.onKeyDown(keyCode, event)
+            }
+
+            // D. 數字鍵選字 (1~9 選候選字)
+            if (engine.hasComposing() && keyCode in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_9) {
+                val selectIndex = keyCode - KeyEvent.KEYCODE_1
+                val candidates = engine.getCandidates()
+                if (selectIndex < candidates.size) {
+                    selectCandidate(candidates[selectIndex])
+                    return true
+                }
+            }
+
+            // E. 大千注音按鍵映射輸入
+            val zhuyinChar = DAQIAN_KEY_MAP[keyCode]
+            if (zhuyinChar != null) {
+                val keyId = com.bopomofo.t9ime.engine.KeyMapping.getKeyId(zhuyinChar)
+                if (keyId != null) {
+                    val candidates = if (keyId == 11) {
+                        val (_, cands) = engine.cycleTone()
+                        cands
+                    } else {
+                        engine.pressKey(keyId)
+                    }
+                    refreshUI(candidates)
+                    return true
+                }
+            }
+        }
+
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        // Shift 單按一秒切換中英文（PC 經典體驗）
+        if (keyCode == KeyEvent.KEYCODE_SHIFT_LEFT || keyCode == KeyEvent.KEYCODE_SHIFT_RIGHT) {
+            if (isPhysicalShiftPressed && !event.isCanceled) {
+                currentMode = if (currentMode == KeyboardMode.ZHUYIN) KeyboardMode.ENGLISH_QWERTY else KeyboardMode.ZHUYIN
+                engine.clear()
+                currentInputConnection?.setComposingText("", 1)
+                refreshUI(emptyList())
+                updateKeyboardModeUI()
+            }
+            isPhysicalShiftPressed = false
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
     }
 }

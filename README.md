@@ -1,6 +1,6 @@
-# BopomoT9 (ㄅ半 12 鍵注音輸入法)
+# 安卓注音九宮格輸入法 (Android Bopomofo T9 IME)
 
-一款專為 Android 設計的**輕量、流暢、純本地離線** 12 鍵（4×3 宮格）繁體注音輸入法。
+一款專為 Android 設計的**輕量、流暢、純本地離線** 12 鍵（4×3 九宮格）繁體注音輸入法。
 
 > **致敬與靈感來源**：  
 > 本專案的 12 鍵注音鍵盤佈局靈感與設計概念參考了 [Rizumu85/fcitx5-android-t9-phone](https://github.com/Rizumu85/fcitx5-android-t9-phone)。本專案採用純原生 Android Kotlin 獨立開發實現，具備獨立的前綴樹（Trie）注音斷詞引擎，不依賴 Fcitx5 框架。

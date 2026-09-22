@@ -383,6 +383,32 @@
                 android:orientation="horizontal" />
         </LinearLayout>
 
+        <!-- 3. 手寫畫布區域 (Handwriting Layout) -->
+        <FrameLayout
+            android:id="@+id/layout_handwriting"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+
+            <com.bopomofo.t9ime.ui.HandwritingCanvasView
+                android:id="@+id/handwriting_canvas"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@drawable/bg_key" />
+
+            <Button
+                android:id="@+id/btn_handwriting_clear"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="64dp"
+                android:layout_height="40dp"
+                android:layout_gravity="end|bottom"
+                android:layout_margin="8dp"
+                android:background="@drawable/bg_key_action"
+                android:text="重寫"
+                android:textColor="@color/kb_text_primary"
+                android:textSize="14sp" />
+        </FrameLayout>
+
     </FrameLayout>
 
     <!-- 底部功能與控制欄 (123, 26鍵/9鍵切換, 逗號, 空格/繁簡, 句號, 中/英切換) -->

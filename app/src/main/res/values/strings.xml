@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">繁體注音 12 鍵輸入法</string>
-    <string name="ime_name">繁體注音 12 鍵</string>
+    <string name="app_name">安卓注音九宮格輸入法</string>
+    <string name="ime_name">安卓注音九宮格輸入法</string>
     <string name="subtype_zh_tw">繁體中文 (注音九宮格)</string>
 </resources>
