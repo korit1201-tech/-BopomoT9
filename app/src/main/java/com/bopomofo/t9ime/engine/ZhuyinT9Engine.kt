@@ -19,6 +19,7 @@ class ZhuyinT9Engine(private val context: Context) {
 
     // 聯想詞庫 (Next-word Prediction)：記錄「上一個詞」接續「下一個推薦詞」
     private val nextWordAssociations = mutableMapOf<String, MutableList<String>>()
+    private val userDict = UserDictionaryManager.getInstance(context)
 
     companion object {
         val TONE_SYMBOLS = listOf(' ', 'ˇ', 'ˋ', 'ˊ', '˙')
@@ -26,7 +27,24 @@ class ZhuyinT9Engine(private val context: Context) {
 
     init {
         loadDictionary()
+        loadUserDictionaryEntries()
         initAssociations()
+        userDict.onDictionaryChangedListener = {
+            loadUserDictionaryEntries()
+            if (currentKeys.isNotEmpty()) {
+                recalculate()
+            }
+        }
+    }
+
+    private fun loadUserDictionaryEntries() {
+        val userEntries = userDict.getAllEntries()
+        for (u in userEntries) {
+            if (u.zhuyin.isNotEmpty()) {
+                val weight = 5000000 + minOf(u.count * 6000000, 100000000)
+                trie.insert(DictEntry(u.word, u.zhuyin, weight))
+            }
+        }
     }
 
     private fun loadDictionary() {
@@ -295,16 +313,21 @@ class ZhuyinT9Engine(private val context: Context) {
             allResults
         }
 
+        // 結合個人化動態權重加成（越常選越前排）進行排序
+        val rankedResults = toneFiltered.sortedByDescending { entry ->
+            entry.weight + userDict.getBoost(entry.word)
+        }
+
         if (locked != null) {
-            val filtered = toneFiltered.filter { entry ->
+            val filtered = rankedResults.filter { entry ->
                 val clean = entry.zhuyin.filter { it !in "ˇˋˊ˙" }
                 clean.startsWith(locked.filter { it !in "ˇˋˊ˙" })
             }
-            cachedCandidates = if (filtered.isNotEmpty()) filtered else toneFiltered
+            cachedCandidates = if (filtered.isNotEmpty()) filtered else rankedResults
             return
         }
 
-        cachedCandidates = toneFiltered
+        cachedCandidates = rankedResults
     }
 
     fun getPossibleZhuyinCombinations(): List<String> = cachedZhuyinCombos

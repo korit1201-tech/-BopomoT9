@@ -15,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
 import android.os.Build
 import android.os.VibrationEffect
@@ -683,6 +684,16 @@ class ZhuyinInputMethodService : InputMethodService() {
             updateKeyboardModeUI()
         }
 
+        // 長按 123 鍵直接開啟「設定與詞庫匯入/匯出」頁面
+        btnMode123.setOnLongClickListener {
+            triggerHapticFeedback()
+            val intent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+            true
+        }
+
         btnQwertyToggle.setOnClickListener {
             triggerHapticFeedback()
             if (currentMode == KeyboardMode.ENGLISH_QWERTY) {
@@ -1176,6 +1187,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         if (entry.word.startsWith("【")) return
         commitProcessedText(entry.word)
         lastCommittedWord = entry.word
+        com.bopomofo.t9ime.engine.UserDictionaryManager.getInstance(this).recordUsage(entry.word, entry.zhuyin)
         engine.clear()
         currentInputConnection?.setComposingText("", 1)
         if (::handwritingCanvas.isInitialized) {
