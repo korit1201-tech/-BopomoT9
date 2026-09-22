@@ -33,6 +33,15 @@ import com.bopomofo.t9ime.ui.SwipeKeyButton
  */
 class ZhuyinInputMethodService : InputMethodService() {
 
+    companion object {
+        private const val MAX_CANDIDATES_DISPLAY = 30
+        private const val CANDIDATE_BAR_PADDING_PX = 32
+        private const val CANDIDATE_BAR_PADDING_VERTICAL_PX = 16
+        private const val KEYBOARD_MIN_HEIGHT_DP = 180
+        private const val KEYBOARD_MAX_HEIGHT_DP = 380
+        private const val KEYBOARD_DEFAULT_HEIGHT_DP = 240
+    }
+
     enum class KeyboardMode {
         ZHUYIN,         // 12 鍵注音
         NUMBER_SYM,     // 12 鍵數字/符號
@@ -180,7 +189,7 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         // 鍵盤高度拉伸調整（支援上下拖動自由縮放大小，預設 240dp）
         val prefs = getSharedPreferences("ime_prefs", Context.MODE_PRIVATE)
-        val savedHeightDp = prefs.getInt("pref_keyboard_height_dp", 240)
+        val savedHeightDp = prefs.getInt("pref_keyboard_height_dp", KEYBOARD_DEFAULT_HEIGHT_DP)
         val density = resources.displayMetrics.density
         layoutMainFrame.layoutParams.height = (savedHeightDp * density).toInt()
 
@@ -196,8 +205,8 @@ class ZhuyinInputMethodService : InputMethodService() {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val deltaY = startY - event.rawY // 向上拉 deltaY > 0 -> 高度放大
-                    val minHeightPx = (180 * density).toInt()
-                    val maxHeightPx = (380 * density).toInt()
+                    val minHeightPx = (KEYBOARD_MIN_HEIGHT_DP * density).toInt()
+                    val maxHeightPx = (KEYBOARD_MAX_HEIGHT_DP * density).toInt()
                     val newHeight = (startHeight + deltaY).toInt().coerceIn(minHeightPx, maxHeightPx)
                     if (layoutMainFrame.height != newHeight) {
                         layoutMainFrame.layoutParams.height = newHeight
@@ -614,7 +623,7 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         updateSymbolsDisplay()
 
-        btnSymAt?.setOnClickListener {
+        btnSymAt.setOnClickListener {
             triggerHapticFeedback()
             commitSymbol(if (isTraditionalMode()) "＠" else "@")
         }
@@ -650,7 +659,12 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun isTraditionalMode(): Boolean {
-        return currentMode == KeyboardMode.ZHUYIN && !isSimplified
+        // 只要不是簡體模式，逗號/句號就輸出全形（適用注音、數字、手寫模式）
+        // 英文模式下強制半形
+        return when (currentMode) {
+            KeyboardMode.ENGLISH_T9, KeyboardMode.ENGLISH_QWERTY -> false
+            else -> !isSimplified
+        }
     }
 
 
@@ -792,6 +806,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 }
                 btnQwertyToggle.visibility = View.GONE
                 update12KeyLabelsZhuyin()
+                if (::btnSymAt.isInitialized) btnSymAt.visibility = View.VISIBLE
             }
             KeyboardMode.HANDWRITING -> {
                 layout12Key.visibility = View.GONE
@@ -801,6 +816,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 btnLangToggle.text = "中"
                 btnSpaceSwipe.text = "手"
                 btnQwertyToggle.visibility = View.GONE
+                if (::btnSymAt.isInitialized) btnSymAt.visibility = View.VISIBLE
             }
             KeyboardMode.NUMBER_SYM -> {
                 layout12Key.visibility = View.VISIBLE
@@ -811,6 +827,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 btnSpaceSwipe.text = "空格"
                 btnQwertyToggle.visibility = View.GONE
                 update12KeyLabelsNumbers()
+                if (::btnSymAt.isInitialized) btnSymAt.visibility = View.VISIBLE
             }
             KeyboardMode.ENGLISH_T9 -> {
                 layout12Key.visibility = View.VISIBLE
@@ -822,6 +839,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 btnQwertyToggle.visibility = View.VISIBLE
                 btnQwertyToggle.text = "26鍵"
                 update12KeyLabelsT9English()
+                if (::btnSymAt.isInitialized) btnSymAt.visibility = View.GONE
             }
             KeyboardMode.ENGLISH_QWERTY -> {
                 layout12Key.visibility = View.GONE
@@ -833,6 +851,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 btnQwertyToggle.visibility = View.VISIBLE
                 btnQwertyToggle.text = "9鍵"
                 updateQwertyKeysText()
+                if (::btnSymAt.isInitialized) btnSymAt.visibility = View.VISIBLE
             }
         }
         updateSymbolsDisplay()
@@ -873,7 +892,22 @@ class ZhuyinInputMethodService : InputMethodService() {
                 setupSymbolButton(btnSym4, ":", listOf(";", "\""))
                 setupSymbolButton(btnSym5, "@", listOf("#", "$"))
             }
-            else -> {}
+            KeyboardMode.ENGLISH_QWERTY -> {
+                // QWERTY 模式下 layout_12key 隱藏，但仍重設按鈕避免殘留
+                setupSymbolButton(btnSym1, "？", listOf("?", "¿"))
+                setupSymbolButton(btnSym2, "！", listOf("!", "¡"))
+                setupSymbolButton(btnSym3, "……", listOf("…", "—"))
+                setupSymbolButton(btnSym4, "：", listOf("；", "『", "』"))
+                setupSymbolButton(btnSym5, "～", listOf("·", "《", "》"))
+            }
+            KeyboardMode.HANDWRITING -> {
+                // 手寫模式：與注音相同標點
+                setupSymbolButton(btnSym1, "？", listOf("?", "¿"))
+                setupSymbolButton(btnSym2, "！", listOf("!", "¡"))
+                setupSymbolButton(btnSym3, "……", listOf("…", "—"))
+                setupSymbolButton(btnSym4, "：", listOf("；", "『", "』"))
+                setupSymbolButton(btnSym5, "～", listOf("·", "《", "》"))
+            }
         }
     }
 
@@ -1009,9 +1043,14 @@ class ZhuyinInputMethodService : InputMethodService() {
             val candidates = engine.backspace()
             refreshUI(candidates)
         } else {
-            currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+            val ic = currentInputConnection
+            if (ic != null) {
+                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
+                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+            }
+            // 退格後清除接續預測（因為前一個詞可能已被修改）
             lastCommittedWord = null
-            showNextWordPredictions("")
+            candidateContainer.removeAllViews()
         }
     }
 
@@ -1101,12 +1140,12 @@ class ZhuyinInputMethodService : InputMethodService() {
             return
         }
 
-        for ((index, entry) in candidates.take(30).withIndex()) {
+        for ((index, entry) in candidates.take(MAX_CANDIDATES_DISPLAY).withIndex()) {
             val displayWord = if (isSimplified) ChineseConverter.toSimplified(entry.word) else entry.word
             val tv = TextView(this).apply {
                 text = displayWord
                 textSize = 20f
-                setPadding(32, 16, 32, 16)
+                setPadding(CANDIDATE_BAR_PADDING_PX, CANDIDATE_BAR_PADDING_VERTICAL_PX, CANDIDATE_BAR_PADDING_PX, CANDIDATE_BAR_PADDING_VERTICAL_PX)
                 setTextColor(
                     if (index == 0) ContextCompat.getColor(context, R.color.kb_candidate_text)
                     else ContextCompat.getColor(context, R.color.kb_text_primary)
@@ -1162,6 +1201,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         KeyEvent.KEYCODE_3 to 'ˇ', // 三聲
         KeyEvent.KEYCODE_4 to 'ˋ', // 四聲
         KeyEvent.KEYCODE_6 to 'ˊ', // 二聲
+        KeyEvent.KEYCODE_EQUALS to 'ˊ', // = 鍵對應二聲（大千標準，與 6 鍵重複但符合習慣）
         KeyEvent.KEYCODE_7 to '˙'  // 輕聲
     )
 

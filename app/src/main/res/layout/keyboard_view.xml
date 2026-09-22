@@ -384,7 +384,7 @@
             android:orientation="vertical"
             android:visibility="gone">
 
-            <!-- QWERTY 常用符號列: - + * / @ # $ % ^ & -->
+            <!-- QWERTY 常用符號列: + - * / = ( ) @ _ & -->
             <LinearLayout
                 android:id="@+id/qwerty_row_symbols"
                 android:layout_width="match_parent"

@@ -15,7 +15,6 @@ data class DictEntry(
 class TrieNode {
     val children = mutableMapOf<Int, TrieNode>()
     val exactEntries = mutableListOf<DictEntry>()
-    val prefixEntries = mutableListOf<DictEntry>()
 }
 
 class TrieDictionary {
@@ -80,9 +79,11 @@ class TrieDictionary {
     }
 
     private fun collectPrefix(node: TrieNode, results: MutableList<DictEntry>, depth: Int, maxDepth: Int) {
-        if (depth > maxDepth || results.size > 50) return
+        if (depth > maxDepth || results.size >= 50) return
         for ((_, child) in node.children) {
-            results.addAll(child.exactEntries)
+            val remaining = 50 - results.size
+            if (remaining <= 0) return
+            results.addAll(child.exactEntries.take(remaining))
             collectPrefix(child, results, depth + 1, maxDepth)
         }
     }

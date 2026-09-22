@@ -44,7 +44,8 @@ class ZhuyinT9Engine(private val context: Context) {
                     }
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.e("BopomofoIME", "字典載入失敗", e)
         }
     }
 

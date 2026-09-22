@@ -117,4 +117,9 @@ class HandwritingCanvasView @JvmOverloads constructor(
         currentStroke.clear()
         invalidate()
     }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        handler.removeCallbacks(recognizeRunnable)
+    }
 }
