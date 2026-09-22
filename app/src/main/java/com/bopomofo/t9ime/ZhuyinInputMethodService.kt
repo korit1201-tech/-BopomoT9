@@ -829,14 +829,39 @@ class ZhuyinInputMethodService : InputMethodService() {
             updateKeyboardModeUI()
         }
 
-        // 長按 123 鍵直接開啟「設定與詞庫匯入/匯出」頁面
-        btnMode123.setOnLongClickListener {
-            triggerHapticFeedback()
-            val intent = Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            }
-            startActivity(intent)
+        // 123 鍵回歸單純點擊切換
+        btnMode123.setOnLongClickListener(null)
+
+        // 長按 中/EN 鍵開啟設定畫面，介面帶有 ⚙ 齒輪提示
+        btnLangToggle.setOnLongClickListener {
+            openSettings()
             true
+        }
+
+        btnSpaceSwipe.transformationMethod = null
+        btnSpaceSwipe.includeFontPadding = false
+        btnSpaceSwipe.setLineSpacing(0f, 0.9f)
+
+        // 提供空白鍵四向滑動指示盤（向左向右提示切換簡體/手寫）
+        btnSpaceSwipe.swipeLabelsProvider = {
+            if (currentMode == KeyboardMode.ZHUYIN || currentMode == KeyboardMode.HANDWRITING) {
+                when (chineseSubMode) {
+                    ChineseInputSubMode.TRADITIONAL -> mapOf(
+                        SwipeKeyButton.Direction.LEFT to "簡體",
+                        SwipeKeyButton.Direction.RIGHT to "手寫"
+                    )
+                    ChineseInputSubMode.SIMPLIFIED -> mapOf(
+                        SwipeKeyButton.Direction.LEFT to "手寫",
+                        SwipeKeyButton.Direction.RIGHT to "繁體"
+                    )
+                    ChineseInputSubMode.HANDWRITING -> mapOf(
+                        SwipeKeyButton.Direction.LEFT to "繁體",
+                        SwipeKeyButton.Direction.RIGHT to "簡體"
+                    )
+                }
+            } else {
+                emptyMap()
+            }
         }
 
         btnQwertyToggle.setOnClickListener {
@@ -946,6 +971,48 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
     }
 
+    private fun openSettings() {
+        triggerHapticFeedback()
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        startActivity(intent)
+    }
+
+    private fun formatLangKeyLabel(lang: String): CharSequence {
+        val fullText = "$lang\n⚙"
+        val spannable = SpannableString(fullText)
+        val split = lang.length
+        val primaryColor = ContextCompat.getColor(this, R.color.kb_text_primary)
+        val secondaryColor = ContextCompat.getColor(this, R.color.kb_text_secondary)
+
+        spannable.setSpan(RelativeSizeSpan(0.95f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(StyleSpan(Typeface.BOLD), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(primaryColor), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+        spannable.setSpan(RelativeSizeSpan(0.60f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(secondaryColor), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return spannable
+    }
+
+    private fun formatSpaceChineseSubModeLabel(current: String, leftHint: String, rightHint: String): CharSequence {
+        val fullText = "$current\n‹ $leftHint · $rightHint ›"
+        val spannable = SpannableString(fullText)
+        val split = current.length
+        val primaryColor = ContextCompat.getColor(this, R.color.kb_text_primary)
+        val secondaryColor = ContextCompat.getColor(this, R.color.kb_text_secondary)
+
+        // 第一行主狀態大字加粗
+        spannable.setSpan(RelativeSizeSpan(1.15f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(StyleSpan(Typeface.BOLD), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(primaryColor), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+        // 第二行滑動切換提示
+        spannable.setSpan(RelativeSizeSpan(0.60f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(secondaryColor), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return spannable
+    }
+
     private fun updateKeyboardModeUI() {
         when (currentMode) {
             KeyboardMode.ZHUYIN -> {
@@ -953,12 +1020,23 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "123"
-                btnLangToggle.text = "中"
+                btnLangToggle.transformationMethod = null
+                btnLangToggle.includeFontPadding = false
+                btnLangToggle.setLineSpacing(0f, 0.9f)
+                btnLangToggle.text = formatLangKeyLabel("中/EN")
                 btnLangToggle.setOnTouchListener(null) // 恢復語言切換 click 行為
+                btnLangToggle.setOnLongClickListener {
+                    openSettings()
+                    true
+                }
+
+                btnSpaceSwipe.transformationMethod = null
+                btnSpaceSwipe.includeFontPadding = false
+                btnSpaceSwipe.setLineSpacing(0f, 0.9f)
                 btnSpaceSwipe.text = when (chineseSubMode) {
-                    ChineseInputSubMode.TRADITIONAL -> "繁"
-                    ChineseInputSubMode.SIMPLIFIED -> "簡"
-                    ChineseInputSubMode.HANDWRITING -> "手"
+                    ChineseInputSubMode.TRADITIONAL -> formatSpaceChineseSubModeLabel("繁", "簡體", "手寫")
+                    ChineseInputSubMode.SIMPLIFIED -> formatSpaceChineseSubModeLabel("簡", "手寫", "繁體")
+                    ChineseInputSubMode.HANDWRITING -> formatSpaceChineseSubModeLabel("手", "繁體", "簡體")
                 }
                 btnQwertyToggle.visibility = View.GONE
                 update12KeyLabelsZhuyin()
@@ -973,7 +1051,10 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.VISIBLE
                 btnMode123.text = "123"
-                btnSpaceSwipe.text = "手"
+                btnSpaceSwipe.transformationMethod = null
+                btnSpaceSwipe.includeFontPadding = false
+                btnSpaceSwipe.setLineSpacing(0f, 0.9f)
+                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("手", "繁體", "簡體")
                 btnQwertyToggle.visibility = View.GONE
                 if (::btnSymAt.isInitialized) {
                     btnSymAt.text = "↵"  // 手寫模式：@ 位置改為換行鍵
@@ -982,6 +1063,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 btnClear?.text = "清空"
                 // 手寫模式下「中/英」位置改為退格鍵
                 btnLangToggle.text = "⌫"
+                btnLangToggle.setOnLongClickListener(null)
                 btnLangToggle.setOnTouchListener { v, event ->
                     when (event.action) {
                         MotionEvent.ACTION_DOWN -> {
@@ -1007,8 +1089,15 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "注音"
-                btnLangToggle.text = "中"
+                btnLangToggle.transformationMethod = null
+                btnLangToggle.includeFontPadding = false
+                btnLangToggle.setLineSpacing(0f, 0.9f)
+                btnLangToggle.text = formatLangKeyLabel("中/EN")
                 btnLangToggle.setOnTouchListener(null)
+                btnLangToggle.setOnLongClickListener {
+                    openSettings()
+                    true
+                }
                 btnSpaceSwipe.text = if (isCapsLock) "大寫" else "空格"
                 btnQwertyToggle.visibility = View.VISIBLE  // 可切換到 26 鍵英文
                 btnQwertyToggle.text = "26鍵"
@@ -1025,8 +1114,15 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "123"
-                btnLangToggle.text = "EN"
+                btnLangToggle.transformationMethod = null
+                btnLangToggle.includeFontPadding = false
+                btnLangToggle.setLineSpacing(0f, 0.9f)
+                btnLangToggle.text = formatLangKeyLabel("EN/中")
                 btnLangToggle.setOnTouchListener(null)
+                btnLangToggle.setOnLongClickListener {
+                    openSettings()
+                    true
+                }
                 btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
                 btnQwertyToggle.visibility = View.VISIBLE
                 btnQwertyToggle.text = "26鍵"
@@ -1039,8 +1135,15 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.VISIBLE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
                 btnMode123.text = "123"
-                btnLangToggle.text = "EN"
+                btnLangToggle.transformationMethod = null
+                btnLangToggle.includeFontPadding = false
+                btnLangToggle.setLineSpacing(0f, 0.9f)
+                btnLangToggle.text = formatLangKeyLabel("EN/中")
                 btnLangToggle.setOnTouchListener(null) // 恢復語言切換 click 行為
+                btnLangToggle.setOnLongClickListener {
+                    openSettings()
+                    true
+                }
                 btnSpaceSwipe.text = "空格"
                 btnQwertyToggle.visibility = View.GONE // 拿掉 26 鍵時的 9 鍵切換按鈕
                 updateQwertyKeysText()
