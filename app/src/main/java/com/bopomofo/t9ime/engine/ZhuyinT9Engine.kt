@@ -188,25 +188,28 @@ class ZhuyinT9Engine(private val context: Context) {
         }
 
         val comboSet = LinkedHashSet<String>()
-        val keyLen = currentKeys.size
+        // 純注音按鍵數（排除聲調鍵 K11），用於截取注音前綴
+        val toneChar = if (currentToneIndex > 0) TONE_SYMBOLS[currentToneIndex] else null
+        val phonemeKeyLen = currentKeys.count { it != 11 }
 
         for (entry in candidateList) {
             val clean = entry.zhuyin.filter { it !in "ˇˋˊ˙" }
-            if (clean.length >= keyLen) {
-                comboSet.add(clean.substring(0, keyLen))
-            } else {
-                comboSet.add(clean)
-            }
+            val prefix = if (clean.length >= phonemeKeyLen) clean.substring(0, phonemeKeyLen) else clean
+            // 若使用者已選聲調，在顯示標籤上附加聲調符號
+            val displayLabel = if (toneChar != null) "$prefix$toneChar" else prefix
+            comboSet.add(displayLabel)
             if (comboSet.size >= 8) break
         }
 
         if (comboSet.isEmpty()) {
             val sb = StringBuilder()
             for (k in currentKeys) {
+                if (k == 11) continue  // 聲調鍵由 toneChar 處理
                 val chs = KeyMapping.getChars(k)
                 if (chs.isNotEmpty()) sb.append(chs[0])
             }
-            comboSet.add(sb.toString())
+            val fallback = if (toneChar != null) "${sb}${toneChar}" else sb.toString()
+            comboSet.add(fallback)
         }
 
         cachedZhuyinCombos = comboSet.toList()
@@ -248,16 +251,25 @@ class ZhuyinT9Engine(private val context: Context) {
         val allResults = rawResults ?: trie.search(currentKeys)
         val locked = lockedZhuyinCombo
 
+        // 按聲調過濾：若使用者已選定聲調，只顯示含該聲調的候選詞
+        val toneFiltered = if (currentToneIndex > 0) {
+            val expectedTone = TONE_SYMBOLS[currentToneIndex]
+            val filtered = allResults.filter { entry -> entry.zhuyin.contains(expectedTone) }
+            if (filtered.isNotEmpty()) filtered else allResults
+        } else {
+            allResults
+        }
+
         if (locked != null) {
-            val filtered = allResults.filter { entry ->
+            val filtered = toneFiltered.filter { entry ->
                 val clean = entry.zhuyin.filter { it !in "ˇˋˊ˙" }
-                clean.startsWith(locked)
+                clean.startsWith(locked.filter { it !in "ˇˋˊ˙" })
             }
-            cachedCandidates = if (filtered.isNotEmpty()) filtered else allResults
+            cachedCandidates = if (filtered.isNotEmpty()) filtered else toneFiltered
             return
         }
 
-        cachedCandidates = allResults
+        cachedCandidates = toneFiltered
     }
 
     fun getPossibleZhuyinCombinations(): List<String> = cachedZhuyinCombos
