@@ -73,6 +73,12 @@ $env:JAVA_HOME="<你的 Java 路徑>"
 
 ---
 
+## 📝 更新日誌
+
+詳細版本演進紀錄請參閱 [CHANGELOG.md](CHANGELOG.md)。
+
+---
+
 ## 📄 開源授權
 
 本專案基於 [MIT License](LICENSE) 開源。
