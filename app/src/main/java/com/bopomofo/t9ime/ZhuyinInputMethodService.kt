@@ -903,7 +903,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                     commitProcessedText(topWord)
                     engine.clear()
                     lastCommittedWord = topWord
-                    currentInputConnection?.setComposingText("", 1)
+                    currentInputConnection?.finishComposingText()
                     showNextWordPredictions(topWord)
                 }
             } else {
@@ -1387,8 +1387,30 @@ class ZhuyinInputMethodService : InputMethodService() {
         } else {
             val ic = currentInputConnection
             if (ic != null) {
-                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
-                ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL))
+                try {
+                    val selectedText = ic.getSelectedText(0)
+                    if (!selectedText.isNullOrEmpty()) {
+                        // 若有反白選取文字，直接以空字串替換以刪除選取範圍
+                        ic.commitText("", 1)
+                    } else {
+                        // 針對已確認上屏文字退格刪除：
+                        // 1. Android N (7.0+) 優先使用 deleteSurroundingTextInCodePoints 刪除完整字元 (含 Emoji / 延伸字符)
+                        // 2. 其次使用 deleteSurroundingText 刪除一個字元
+                        // 3. 備用容錯：若上述 API 失敗則調用系統軟鍵盤退格鍵事件
+                        var deleted = false
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            deleted = ic.deleteSurroundingTextInCodePoints(1, 0)
+                        }
+                        if (!deleted) {
+                            deleted = ic.deleteSurroundingText(1, 0)
+                        }
+                        if (!deleted) {
+                            sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+                        }
+                    }
+                } catch (e: Exception) {
+                    sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+                }
             }
             // 退格後清除接續預測（因為前一個詞可能已被修改）
             lastCommittedWord = null
@@ -1400,15 +1422,17 @@ class ZhuyinInputMethodService : InputMethodService() {
         resetT9MultiTap()
         if (engine.hasComposing()) {
             engine.clear()
-            currentInputConnection?.setComposingText("", 1)
+            currentInputConnection?.finishComposingText()
         }
         currentInputConnection?.commitText(text, 1)
+        currentInputConnection?.finishComposingText()
         lastCommittedWord = null
         showNextWordPredictions("")
     }
 
     private fun commitTextDirectly(text: String) {
         currentInputConnection?.commitText(text, 1)
+        currentInputConnection?.finishComposingText()
         lastCommittedWord = null
         showNextWordPredictions("")
     }
@@ -1427,6 +1451,7 @@ class ZhuyinInputMethodService : InputMethodService() {
     private fun updateComposingPreview() {
         if (!engine.hasComposing()) {
             currentInputConnection?.setComposingText("", 1)
+            currentInputConnection?.finishComposingText()
             return
         }
         val previewWord = engine.getTopComposingWord()
@@ -1520,7 +1545,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         lastCommittedWord = entry.word
         com.bopomofo.t9ime.engine.UserDictionaryManager.getInstance(this).recordUsage(entry.word, entry.zhuyin)
         engine.clear()
-        currentInputConnection?.setComposingText("", 1)
+        currentInputConnection?.finishComposingText()
         if (::handwritingCanvas.isInitialized) {
             handwritingCanvas.clearCanvas()
         }
@@ -1588,7 +1613,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                         val top = engine.getTopComposingWord()
                         commitProcessedText(top)
                         engine.clear()
-                        currentInputConnection?.setComposingText("", 1)
+                        currentInputConnection?.finishComposingText()
                     }
                     return true
                 } else {
@@ -1603,7 +1628,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                     val top = engine.getTopComposingWord()
                     commitProcessedText(top)
                     engine.clear()
-                    currentInputConnection?.setComposingText("", 1)
+                    currentInputConnection?.finishComposingText()
                     return true
                 }
                 return super.onKeyDown(keyCode, event)
@@ -1645,7 +1670,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             if (isPhysicalShiftPressed && !event.isCanceled) {
                 currentMode = if (currentMode == KeyboardMode.ZHUYIN) KeyboardMode.ENGLISH_QWERTY else KeyboardMode.ZHUYIN
                 engine.clear()
-                currentInputConnection?.setComposingText("", 1)
+                currentInputConnection?.finishComposingText()
                 refreshUI(emptyList())
                 updateKeyboardModeUI()
             }
@@ -1653,5 +1678,14 @@ class ZhuyinInputMethodService : InputMethodService() {
             return true
         }
         return super.onKeyUp(keyCode, event)
+    }
+
+    override fun onFinishInputView(finishingInput: Boolean) {
+        super.onFinishInputView(finishingInput)
+        engine.clear()
+        lastCommittedWord = null
+        resetT9MultiTap()
+        candidateContainer.removeAllViews()
+        currentInputConnection?.finishComposingText()
     }
 }

@@ -1,6 +1,6 @@
 # 安卓注音九宮格輸入法 (Android BOPOMOFO T9) 專案交接與進度備忘錄
 
-> 本文件更新於 2026-09-23（版本 v1.4.1，versionCode: 7）。  
+> 本文件更新於 2026-09-23（版本 v1.5.1，versionCode: 9）。  
 > 目的：記錄目前系統核心架構、關鍵演算法與維護手冊。
 
 ---
@@ -9,7 +9,7 @@
 
 * **GitHub 倉庫**：`https://github.com/korit1201-tech/android-BOPOMOFO-t9.git`
 * **主分支**：`main`
-* **最新 Release**：`v1.4.1`（Git Tag: `v1.4.1`）
+* **最新 Release**：`v1.5.1`（Git Tag: `v1.5.1`）
 * **開發環境配置**：
   * **Java JBR**：`C:\Program Files\Android\Android Studio\jbr`
   * **Android SDK**：`C:\Users\Korit\AppData\Local\Android\Sdk`

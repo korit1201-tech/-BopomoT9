@@ -4,6 +4,18 @@
 
 ---
 
+## [v1.5.1] - 2026-09-23
+
+### 🐛 修復退格鍵無法刪除已確認上屏文字問題 (Fixed Backspace Unable to Delete Committed Text)
+- **根除硬體按鍵事件失效問題**：先前在文字確認上屏（非組字狀態）時，退格鍵使用裸 `ic.sendKeyEvent(KeyEvent.KEYCODE_DEL)`，導致在 WebView、Chrome、Compose TextField、社群通訊軟體等現代 Android 應用中，軟鍵盤的 DEL 事件直接被忽略而無法退格刪除文字。
+- **導入標準 Android IME 退格規範**：
+  - 支援反白選取文字時直接清除選取區間（`ic.commitText("", 1)`）。
+  - 無選取時優先調用 `deleteSurroundingTextInCodePoints(1, 0)` 進行精準刪除，完整保護 Emoji 及 Unicode 補充字元不被拆散。
+  - 保留 `deleteSurroundingText(1, 0)` 與標準 `sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)` 作為雙重備用容錯機制。
+- **徹底清除 Composing 狀態殘留**：在選字上屏、空白確認與輸入切換後統一調用 `finishComposingText()`，確保輸入編輯器不會殘留 0 長度的組字區間而阻礙文字退格。
+
+---
+
 ## [v1.5.0] - 2026-09-23
 
 ### 🌐 「繁」按鍵滑動導引視覺設計 (Visual Swipe Indicator for Traditional/Simplified/Handwriting)
