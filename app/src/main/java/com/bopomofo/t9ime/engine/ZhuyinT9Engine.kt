@@ -328,11 +328,9 @@ class ZhuyinT9Engine(private val context: Context) {
     }
 
     /**
-     * 動態規劃 (DP / Viterbi) 全域最佳分詞演算法
-     * 採用標準 Unigram 對數機率模型 + 成詞長度偏置
-     * 僅在按鍵完全閉合成句時輸出預測長句，打到一半絕不強行拼裝怪詞。
+     * 動態規劃 (DP / Viterbi) 全域最佳分詞演算法 - 取得分詞片段與按鍵長度
      */
-    private fun findBestSentence(keys: List<Int>): DictEntry? {
+    private fun findBestSentenceSegments(keys: List<Int>): List<Pair<String, Int>>? {
         val n = keys.size
         if (n < 4) return null
 
@@ -368,29 +366,68 @@ class ZhuyinT9Engine(private val context: Context) {
             }
         }
 
-        // 僅當整句按鍵能完整打通到結尾 n 時才產生預測長句
-        // 嚴禁在未打完時拿半音拼接後綴產生怪詞
-        if (dp[n] == Double.NEGATIVE_INFINITY) {
-            return null
-        }
+        if (dp[n] == Double.NEGATIVE_INFINITY) return null
 
-        val words = mutableListOf<String>()
-        val zhuyins = mutableListOf<String>()
+        val segments = mutableListOf<Pair<String, Int>>()
         var curr = n
         while (curr > 0) {
             val split = bestSplit[curr] ?: return null
-            words.add(split.second.word)
-            zhuyins.add(split.second.zhuyin)
+            val word = split.second.word
+            val keyLen = curr - split.first
+            segments.add(Pair(word, keyLen))
             curr = split.first
         }
-        words.reverse()
-        zhuyins.reverse()
+        segments.reverse()
+        return segments
+    }
 
-        // 必須由 2 個或以上的詞彙拼合而成，才視為長句預測
-        if (words.size > 1) {
-            return DictEntry(words.joinToString(""), zhuyins.joinToString(""), 100_000_000)
+    private fun findBestSentence(keys: List<Int>): DictEntry? {
+        val segments = findBestSentenceSegments(keys) ?: return null
+        if (segments.size > 1) {
+            val combinedWord = segments.joinToString("") { it.first }
+            return DictEntry(combinedWord, "", 100_000_000)
         }
         return null
+    }
+
+    /**
+     * 長句輸入滑動窗口自動確認 (Sliding Window Prefix Commit)
+     * 當連續輸入的字數/按鍵較多（>= 8 鍵，約 3~4 字以上），且前面分詞已經十分肯定時，
+     * 直接將穩定的第一段詞彙提前上屏確認，留存後續按鍵繼續拼音。
+     */
+    fun pollConfirmedPrefix(): Pair<String, Int>? {
+        val cleanKeys = currentKeys.filter { it != 11 }
+        if (cleanKeys.size < 8) return null
+
+        val segments = findBestSentenceSegments(cleanKeys) ?: return null
+        if (segments.size < 2) return null
+
+        val firstSegment = segments[0] // Pair(word, keyLen)
+        val remainingKeyCount = cleanKeys.size - firstSegment.second
+
+        // 判定條件：
+        // 1. 分詞至少有 3 段 (例如: 今天 + 天氣 + 很...)
+        // 2. 或第一段詞長 >= 2 字 (例如: 今天)，且後續剩餘按鍵 >= 5 鍵 (後面至少還有一個完整字詞)
+        val shouldCommit = segments.size >= 3 || (firstSegment.first.length >= 2 && remainingKeyCount >= 5)
+        if (!shouldCommit) return null
+
+        val keysToRemove = firstSegment.second
+        val newKeys = mutableListOf<Int>()
+        var removed = 0
+        for (k in currentKeys) {
+            if (removed < keysToRemove && k != 11) {
+                removed++
+            } else {
+                newKeys.add(k)
+            }
+        }
+        currentKeys.clear()
+        currentKeys.addAll(newKeys)
+        currentToneIndex = 0
+        lockedZhuyinCombo = null
+
+        recalculate()
+        return Pair(firstSegment.first, keysToRemove)
     }
 
     private fun applyLockFilter(baseList: List<DictEntry>) {

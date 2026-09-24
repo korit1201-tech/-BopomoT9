@@ -30,6 +30,8 @@ class UserDictionaryManager private constructor(private val context: Context) {
     var onDictionaryChangedListener: (() -> Unit)? = null
 
     companion object {
+        const val MAX_USER_ENTRIES = 500 // 個人詞庫上限，杜絕無限制膨脹
+
         @Volatile
         private var instance: UserDictionaryManager? = null
 
@@ -94,9 +96,10 @@ class UserDictionaryManager private constructor(private val context: Context) {
         }
     }
 
+
     /**
      * 記錄使用者選擇詞彙（每次點擊選字時調用）
-     * 記憶體內即時累加 count，存檔自動防抖合併寫入，杜絕頻繁 IO
+     * 記憶體內即時累加 count，自動執行 LRU/頻率衰減淘汰，防抖合併寫入磁碟
      */
     fun recordUsage(word: String, zhuyin: String = "") {
         if (word.isBlank() || word.startsWith("【")) return
@@ -106,6 +109,11 @@ class UserDictionaryManager private constructor(private val context: Context) {
             }
             entry.count += 1
             entry.lastUsed = System.currentTimeMillis()
+
+            // 超過上限時執行自動清理（淘汰單次且最久未使用的條目）
+            if (memoryDict.size > MAX_USER_ENTRIES) {
+                pruneDictionaryLocked()
+            }
         }
 
         // 防抖延遲 2.5 秒儲存，打字期間合併寫檔
@@ -114,12 +122,35 @@ class UserDictionaryManager private constructor(private val context: Context) {
     }
 
     /**
+     * 自動淘汰：保留高頻詞與近期活躍詞，淘汰低頻/一次性孤兒詞
+     */
+    private fun pruneDictionaryLocked() {
+        val now = System.currentTimeMillis()
+        // 評分 = count * 1000 - 天數衰減
+        val sortedEntries = memoryDict.values.sortedBy { entry ->
+            val daysAgo = (now - entry.lastUsed) / (1000 * 3600 * 24)
+            entry.count * 1000 - daysAgo
+        }
+        val removeCount = memoryDict.size - 400 // 清除至 400 條，保留緩衝區
+        if (removeCount > 0) {
+            for (i in 0 until removeCount) {
+                memoryDict.remove(sortedEntries[i].word)
+            }
+        }
+    }
+
+    /**
      * 計算候選詞個人化增幅權重
-     * 每次點選給予 6,000,000 分加權（上限 1.2 億），選過 1 次立即超越一般同音詞
+     * 採用漸進式加權曲線：單字 +15,000 (上限 60,000)，多字詞 +25,000 (上限 100,000)
+     * 既能讓常選詞自然前移超越一般同音詞，又不會因一次誤觸導致冷門字永久霸榜
      */
     fun getBoost(word: String): Int {
         val entry = synchronized(memoryDict) { memoryDict[word] } ?: return 0
-        return minOf(entry.count * 6_000_000, 120_000_000)
+        return if (word.length == 1) {
+            minOf(entry.count * 15_000, 60_000)
+        } else {
+            minOf(entry.count * 25_000, 100_000)
+        }
     }
 
     /**
@@ -132,10 +163,12 @@ class UserDictionaryManager private constructor(private val context: Context) {
     }
 
     /**
-     * 詞庫總詞數
+     * 專屬常用詞彙數（過濾只選過 1 次的單字，真正反映使用者專屬詞彙）
      */
     fun getEntryCount(): Int {
-        return synchronized(memoryDict) { memoryDict.size }
+        return synchronized(memoryDict) {
+            memoryDict.values.count { it.word.length >= 2 || it.count >= 2 }
+        }
     }
 
     /**

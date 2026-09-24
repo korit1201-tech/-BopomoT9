@@ -125,7 +125,7 @@
                         android:layout_margin="2dp"
                         android:layout_weight="1"
                         android:background="@drawable/bg_key_action"
-                        android:text="～"
+                        android:text="、"
                         android:textColor="@color/kb_text_primary"
                         android:textSize="18sp" />
                 </LinearLayout>

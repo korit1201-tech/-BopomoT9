@@ -303,8 +303,9 @@ class ZhuyinInputMethodService : InputMethodService() {
                             val (_, candidates) = engine.cycleTone()
                             refreshUI(candidates)
                         } else {
-                            val candidates = engine.pressKey(keyNum)
-                            refreshUI(candidates)
+                            engine.pressKey(keyNum)
+                            checkAndCommitConfirmedPrefix()
+                            refreshUI(engine.getCandidates())
                         }
                     }
                     KeyboardMode.NUMBER_SYM -> {
@@ -1201,12 +1202,12 @@ class ZhuyinInputMethodService : InputMethodService() {
                 setupSymbolButton(btnSym5, "=", listOf("≠", "≈", "≤", "≥"))
             }
             KeyboardMode.ZHUYIN -> {
-                // 注音模式：常用全形標點
+                // 注音模式：常用全形標點（繁體中文高頻頓號置頂）
                 setupSymbolButton(btnSym1, "？", listOf("?", "¿"))
                 setupSymbolButton(btnSym2, "！", listOf("!", "¡"))
                 setupSymbolButton(btnSym3, "……", listOf("…", "—"))
                 setupSymbolButton(btnSym4, "：", listOf("；", "『", "』"))
-                setupSymbolButton(btnSym5, "～", listOf("·", "《", "》"))
+                setupSymbolButton(btnSym5, "、", listOf("～", "·", "《", "》"))
             }
             KeyboardMode.ENGLISH_T9 -> {
                 // 9鍵英文模式：半形標點
@@ -1222,7 +1223,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 setupSymbolButton(btnSym2, "！", listOf("!", "¡"))
                 setupSymbolButton(btnSym3, "……", listOf("…", "—"))
                 setupSymbolButton(btnSym4, "：", listOf("；", "『", "』"))
-                setupSymbolButton(btnSym5, "～", listOf("·", "《", "》"))
+                setupSymbolButton(btnSym5, "、", listOf("～", "·", "《", "》"))
             }
             KeyboardMode.HANDWRITING -> {
                 // 手寫模式：與注音相同標點
@@ -1230,7 +1231,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 setupSymbolButton(btnSym2, "！", listOf("!", "¡"))
                 setupSymbolButton(btnSym3, "……", listOf("…", "—"))
                 setupSymbolButton(btnSym4, "：", listOf("；", "『", "』"))
-                setupSymbolButton(btnSym5, "～", listOf("·", "《", "》"))
+                setupSymbolButton(btnSym5, "、", listOf("～", "·", "《", "》"))
             }
         }
     }
@@ -1460,6 +1461,14 @@ class ZhuyinInputMethodService : InputMethodService() {
     private fun commitProcessedText(text: String) {
         val finalText = if (isSimplified) ChineseConverter.toSimplified(text) else text
         currentInputConnection?.commitText(finalText, 1)
+    }
+
+    private fun checkAndCommitConfirmedPrefix() {
+        val confirmed = engine.pollConfirmedPrefix()
+        if (confirmed != null) {
+            commitProcessedText(confirmed.first)
+            lastCommittedWord = confirmed.first
+        }
     }
 
     private fun refreshUI(candidates: List<DictEntry>) {
@@ -1719,8 +1728,9 @@ class ZhuyinInputMethodService : InputMethodService() {
                 } else {
                     val keyId = com.bopomofo.t9ime.engine.KeyMapping.getKeyId(zhuyinChar)
                     if (keyId != null) {
-                        val candidates = engine.pressKey(keyId)
-                        refreshUI(candidates)
+                        engine.pressKey(keyId)
+                        checkAndCommitConfirmedPrefix()
+                        refreshUI(engine.getCandidates())
                         return true
                     }
                 }
