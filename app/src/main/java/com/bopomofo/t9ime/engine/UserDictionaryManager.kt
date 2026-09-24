@@ -141,16 +141,19 @@ class UserDictionaryManager private constructor(private val context: Context) {
 
     /**
      * 計算候選詞個人化增幅權重
-     * 採用漸進式加權曲線：單字 +15,000 (上限 60,000)，多字詞 +25,000 (上限 100,000)
-     * 既能讓常選詞自然前移超越一般同音詞，又不會因一次誤觸導致冷門字永久霸榜
+     * 使用者選定/確認過的字詞賦予絕對優選增幅 (≥ 1,000,000)，超越字典既定權重穩居首選
      */
     fun getBoost(word: String): Int {
         val entry = synchronized(memoryDict) { memoryDict[word] } ?: return 0
         return if (word.length == 1) {
-            minOf(entry.count * 15_000, 60_000)
+            1_000_000 + minOf(entry.count * 100_000, 10_000_000)
         } else {
-            minOf(entry.count * 25_000, 100_000)
+            2_000_000 + minOf(entry.count * 200_000, 20_000_000)
         }
+    }
+
+    fun getUsageCount(word: String): Int {
+        return synchronized(memoryDict) { memoryDict[word]?.count ?: 0 }
     }
 
     /**

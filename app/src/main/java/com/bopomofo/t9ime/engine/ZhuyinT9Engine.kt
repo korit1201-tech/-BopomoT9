@@ -273,9 +273,10 @@ class ZhuyinT9Engine(private val context: Context) {
             } else list
         }
 
-        // Tier 1: 完全匹配詞排序（使用者常選詞穩居第一位，原生匹配字優先於容錯字）
+        // Tier 1: 完全匹配詞排序（使用者常選優選詞穩居第一位，原生匹配字優先於容錯字）
         val rankedExact = filterTone(exactResults).sortedWith(
-            compareByDescending<DictEntry> { !it.isTolerant }
+            compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
+                .thenByDescending { !it.isTolerant }
                 .thenByDescending { it.weight + userDict.getBoost(it.word) }
         )
 
@@ -286,7 +287,8 @@ class ZhuyinT9Engine(private val context: Context) {
 
         // Tier 3: 前綴預測詞排序
         val rankedPrefix = filterTone(prefixResults).sortedWith(
-            compareByDescending<DictEntry> { !it.isTolerant }
+            compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
+                .thenByDescending { !it.isTolerant }
                 .thenByDescending { it.weight + userDict.getBoost(it.word) }
         )
 
@@ -483,47 +485,103 @@ class ZhuyinT9Engine(private val context: Context) {
     }
 
     /**
-     * 單字同音/同拼法候選字查詢（供底線組字長按逐字替換使用）：
-     * 1. 依該字的注音找出相同音節（同聲調與不同聲調）
-     * 2. 依 9 鍵序列找出同按鍵拼法的字
-     * 3. 去重並依個人詞庫使用頻率與字典權重排序
+     * 動態學習新詞彙或自訂同音字組合：
+     * 1. 寫入使用者記憶體字典與磁碟檔案
+     * 2. 即時以最高權重 (50,000,000) 注入 Trie 字典，確保該按鍵序列下一次輸入時 100% 穩居首位
+     */
+    fun learnWord(word: String, zhuyin: String = "") {
+        if (word.isBlank() || word.startsWith("【")) return
+        val zy = if (zhuyin.isNotEmpty()) zhuyin else {
+            word.map { getZhuyinForChar(it) }.filter { it.isNotEmpty() }.joinToString(" ")
+        }
+        userDict.recordUsage(word, zy)
+        if (zy.isNotEmpty()) {
+            val usageCount = userDict.getUsageCount(word)
+            val weight = 50_000_000 + minOf(usageCount * 1_000_000, 50_000_000)
+            trie.insert(DictEntry(word, zy, weight))
+            if (word.length == 1) {
+                val list = charZhuyinMap.getOrPut(word[0]) { ArrayList(2) }
+                if (!list.contains(zy)) {
+                    list.add(0, zy)
+                }
+            }
+        }
+    }
+
+    /**
+     * 單字同音/同按鍵組合候選字查詢（供底線組字長按逐字替換使用）：
+     * 1. 查詢完全相同鍵序的所有單字（涵蓋該鍵位上所有可能的拼音字，如 Key 6 包含 此、次、意、吃、一、衣、依、醫等）
+     * 2. 依該字之注音查詢同音字（不同聲調）
+     * 3. 納入前綴延伸單字
+     * 4. 排序：首位原字、使用者曾選字最優先 (getBoost > 0)、字典權重降序
      */
     fun getHomophonesForChar(ch: Char): List<DictEntry> {
         val zhuyins = charZhuyinMap[ch] ?: emptyList()
         val seen = LinkedHashSet<String>()
-        val results = mutableListOf<DictEntry>()
+        val exactKeyEntries = mutableListOf<DictEntry>()
+        val sameZhuyinEntries = mutableListOf<DictEntry>()
+        val prefixKeyEntries = mutableListOf<DictEntry>()
 
         for (zy in zhuyins) {
+            val cleanZy = zy.filter { it !in "ˇˋˊ˙" }
             val seqWithTone = KeyMapping.getSequence(zy, ignoreTones = false)
             val seqNoTone = KeyMapping.getSequence(zy, ignoreTones = true)
 
+            // 1. 同按鍵構成之精確組合（完全相同鍵序的所有單字）
             for (seq in listOf(seqWithTone, seqNoTone).distinct()) {
                 if (seq.isEmpty()) continue
                 val node = trie.searchNode(seq) ?: continue
                 for (e in node.exactEntries) {
                     if (e.word.length == 1 && seen.add(e.word)) {
-                        results.add(e)
+                        val eCleanZy = e.zhuyin.filter { it !in "ˇˋˊ˙" }
+                        if (eCleanZy == cleanZy) {
+                            sameZhuyinEntries.add(e)
+                        } else {
+                            exactKeyEntries.add(e)
+                        }
+                    }
+                }
+            }
+
+            // 2. 同按鍵構成之前綴延伸單字（例如單鍵長按時可展開多鍵字）
+            if (seqNoTone.size <= 2) {
+                val prefixNodes = trie.searchPrefix(seqNoTone, maxDepth = 2)
+                for (e in prefixNodes) {
+                    if (e.word.length == 1 && seen.add(e.word)) {
+                        prefixKeyEntries.add(e)
                     }
                 }
             }
         }
 
         // 保底：若查無注音，從當前候選字表中提取所有單字
-        if (results.isEmpty()) {
+        if (sameZhuyinEntries.isEmpty() && exactKeyEntries.isEmpty()) {
             for (c in cachedCandidates) {
                 if (c.word.length == 1 && seen.add(c.word)) {
-                    results.add(c)
+                    sameZhuyinEntries.add(c)
                 }
             }
         }
 
-        val originalEntry = results.find { it.word == ch.toString() }
+        val originalEntry = sameZhuyinEntries.find { it.word == ch.toString() }
+            ?: exactKeyEntries.find { it.word == ch.toString() }
             ?: DictEntry(ch.toString(), zhuyins.firstOrNull() ?: "", 1000)
 
-        val others = results.filter { it.word != ch.toString() }
-            .sortedByDescending { it.weight + userDict.getBoost(it.word) }
+        // 排序規則：使用者選過字最優先 (getBoost > 0)，其次同音字，再者同鍵其他字
+        val sortComparator = compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
+            .thenByDescending { it.weight + userDict.getBoost(it.word) }
 
-        return listOf(originalEntry) + others.take(25)
+        val sortedSameZy = sameZhuyinEntries.filter { it.word != ch.toString() }.sortedWith(sortComparator)
+        val sortedExactKey = exactKeyEntries.filter { it.word != ch.toString() }.sortedWith(sortComparator)
+        val sortedPrefix = prefixKeyEntries.filter { it.word != ch.toString() }.sortedWith(sortComparator)
+
+        val merged = mutableListOf<DictEntry>()
+        merged.add(originalEntry)
+        merged.addAll(sortedSameZy)
+        merged.addAll(sortedExactKey)
+        merged.addAll(sortedPrefix)
+
+        return merged.take(80)
     }
 
     /**

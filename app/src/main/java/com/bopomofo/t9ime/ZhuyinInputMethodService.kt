@@ -1755,13 +1755,12 @@ class ZhuyinInputMethodService : InputMethodService() {
         commitProcessedText(word)
         lastCommittedWord = word
 
-        val userDict = com.bopomofo.t9ime.engine.UserDictionaryManager.getInstance(this)
-        // 1. 記錄選定確認的整組詞彙
-        userDict.recordUsage(word, zhuyin)
+        // 1. 記錄選定確認的整組詞彙，並即時注入 Trie 字典賦予絕對首選優選
+        engine.learnWord(word, zhuyin)
 
         // 2. 記錄個別替換字及其注音，等確定出去才紀錄成優選
         for ((_, pair) in replacedCharsMap) {
-            userDict.recordUsage(pair.first, pair.second)
+            engine.learnWord(pair.first, pair.second)
         }
 
         // 3. 重設組字狀態
