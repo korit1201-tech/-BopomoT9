@@ -89,6 +89,14 @@ class ZhuyinInputMethodService : InputMethodService() {
     private val candidateTextViewPool = ArrayList<TextView>()
     private val comboButtonPool = ArrayList<Button>()
 
+    // 底線候選文字同音字/同拼法逐字替換狀態 (1.6.5)
+    private var isHomophoneSelectionMode = false
+    private var homophoneCharIndex: Int = -1
+    private var customComposingWord: String? = null
+    private val replacedCharsMap = mutableMapOf<Int, Pair<String, String>>() // index -> Pair(newChar, zhuyin)
+    private var lastComposingStart: Int = -1
+    private var lastComposingEnd: Int = -1
+
     private lateinit var layout12Key: LinearLayout
     private lateinit var layoutQwerty: LinearLayout
     private lateinit var layoutHandwriting: FrameLayout
@@ -313,6 +321,12 @@ class ZhuyinInputMethodService : InputMethodService() {
                 when (currentMode) {
                     KeyboardMode.ZHUYIN -> {
                         lastCommittedWord = null
+                        if (customComposingWord != null || isHomophoneSelectionMode) {
+                            customComposingWord = null
+                            replacedCharsMap.clear()
+                            isHomophoneSelectionMode = false
+                            homophoneCharIndex = -1
+                        }
                         if (keyNum == 11) {
                             val (_, candidates) = engine.cycleTone()
                             refreshUI(candidates)
@@ -824,19 +838,8 @@ class ZhuyinInputMethodService : InputMethodService() {
      */
     private fun performEnterAction() {
         if (engine.hasComposing()) {
-            val candidates = engine.getCandidates()
-            if (candidates.isNotEmpty()) {
-                selectCandidate(candidates.first())
-            } else {
-                val topWord = engine.getTopComposingWord()
-                if (topWord.isNotEmpty()) {
-                    commitProcessedText(topWord)
-                }
-                engine.clear()
-                lastCommittedWord = topWord
-                currentInputConnection?.finishComposingText()
-                refreshUI(emptyList())
-            }
+            val topWord = customComposingWord ?: engine.getCandidates().firstOrNull()?.word ?: engine.getTopComposingWord()
+            commitProcessedWordWithUserDict(topWord)
         } else {
             currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
             currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
@@ -934,17 +937,8 @@ class ZhuyinInputMethodService : InputMethodService() {
             triggerHapticFeedback()
             resetT9MultiTap()
             if (engine.hasComposing()) {
-                val candidates = engine.getCandidates()
-                if (candidates.isNotEmpty()) {
-                    selectCandidate(candidates.first())
-                } else {
-                    val topWord = engine.getTopComposingWord()
-                    commitProcessedText(topWord)
-                    engine.clear()
-                    lastCommittedWord = topWord
-                    currentInputConnection?.finishComposingText()
-                    showNextWordPredictions(topWord)
-                }
+                val topWord = customComposingWord ?: engine.getCandidates().firstOrNull()?.word ?: engine.getTopComposingWord()
+                commitProcessedWordWithUserDict(topWord)
             } else {
                 commitTextDirectly(" ")
                 lastCommittedWord = null
@@ -1432,6 +1426,14 @@ class ZhuyinInputMethodService : InputMethodService() {
     private fun performBackspace() {
         triggerHapticFeedback()
         resetT9MultiTap()
+        if (isHomophoneSelectionMode) {
+            exitHomophoneSelectionMode()
+            return
+        }
+        if (customComposingWord != null) {
+            customComposingWord = null
+            replacedCharsMap.clear()
+        }
         if (engine.hasComposing()) {
             val candidates = engine.backspace()
             refreshUI(candidates)
@@ -1475,6 +1477,10 @@ class ZhuyinInputMethodService : InputMethodService() {
             engine.clear()
             currentInputConnection?.finishComposingText()
         }
+        customComposingWord = null
+        replacedCharsMap.clear()
+        isHomophoneSelectionMode = false
+        homophoneCharIndex = -1
         currentInputConnection?.commitText(text, 1)
         currentInputConnection?.finishComposingText()
         lastCommittedWord = null
@@ -1482,6 +1488,10 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun commitTextDirectly(text: String) {
+        customComposingWord = null
+        replacedCharsMap.clear()
+        isHomophoneSelectionMode = false
+        homophoneCharIndex = -1
         currentInputConnection?.commitText(text, 1)
         currentInputConnection?.finishComposingText()
         lastCommittedWord = null
@@ -1494,6 +1504,7 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun checkAndCommitConfirmedPrefix() {
+        if (customComposingWord != null || isHomophoneSelectionMode) return
         val confirmed = engine.pollConfirmedPrefix()
         if (confirmed != null) {
             commitProcessedText(confirmed.first)
@@ -1511,9 +1522,15 @@ class ZhuyinInputMethodService : InputMethodService() {
         if (!engine.hasComposing()) {
             currentInputConnection?.setComposingText("", 1)
             currentInputConnection?.finishComposingText()
+            customComposingWord = null
+            replacedCharsMap.clear()
+            isHomophoneSelectionMode = false
+            homophoneCharIndex = -1
+            lastComposingStart = -1
+            lastComposingEnd = -1
             return
         }
-        val previewWord = engine.getTopComposingWord()
+        val previewWord = customComposingWord ?: engine.getTopComposingWord()
         val finalPreview = if (isSimplified) ChineseConverter.toSimplified(previewWord) else previewWord
         currentInputConnection?.setComposingText(finalPreview, 1)
     }
@@ -1622,15 +1639,17 @@ class ZhuyinInputMethodService : InputMethodService() {
             )
             tv.setOnClickListener {
                 triggerHapticFeedback()
-                selectCandidate(entry)
+                if (isHomophoneSelectionMode) {
+                    if (entry.word.startsWith("✔")) {
+                        exitHomophoneSelectionMode()
+                    } else {
+                        applyHomophoneReplacement(entry)
+                    }
+                } else {
+                    selectCandidate(entry)
+                }
             }
-
-            // 長按候選詞 → 彈出同音替換字選單（1.6.5 新功能）
-            tv.setOnLongClickListener {
-                triggerHapticFeedback()
-                showHomophonePopup(it, entry)
-                true
-            }
+            tv.setOnLongClickListener(null)
 
             tv.visibility = View.VISIBLE
         }
@@ -1646,50 +1665,62 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     /**
-     * 長按候選詞同音替換選單（1.6.5）
-     *
-     * 從詞典中找出與該詞條相同注音的所有同音字/詞，以 PopupMenu 呈現。
-     * 使用者選擇後：
-     * 1. 將選取的同音字上屏（替換原本預測詞）
-     * 2. 在個人詞庫中記錄該字的使用，提升其未來排序優先級
+     * 底線文字選取同音替換模式：
+     * 當使用者在輸入區長按或點選底線候選字中的某個字時，候選列切換為同音/同拼法候選字。
      */
-    private fun showHomophonePopup(anchor: View, originalEntry: DictEntry) {
-        if (originalEntry.zhuyin.isEmpty()) {
-            // 接續預測詞沒有注音資訊，改為直接選字上屏
-            selectCandidate(originalEntry)
-            return
-        }
+    private fun enterHomophoneSelectionMode(charIndex: Int) {
+        val currentWord = customComposingWord ?: engine.getTopComposingWord()
+        if (charIndex !in currentWord.indices) return
 
-        val homophones = engine.getHomophonesFor(originalEntry)
-        if (homophones.isEmpty()) {
-            // 沒有同音字，直接確認此字
-            selectCandidate(originalEntry)
-            return
-        }
+        isHomophoneSelectionMode = true
+        homophoneCharIndex = charIndex
+        val targetChar = currentWord[charIndex]
 
-        val popup = android.widget.PopupMenu(this, anchor)
+        val homophones = engine.getHomophonesForChar(targetChar)
+        val candidateItems = mutableListOf<DictEntry>()
 
-        // 第一項：原始詞本身（作為確認選項）
-        popup.menu.add(0, 0, 0, "✔ ${originalEntry.word}（確認）")
+        // 第一項：原字確認項（可點擊保持原字或取消同音模式）
+        val origZy = engine.getZhuyinForChar(targetChar)
+        candidateItems.add(DictEntry("✔ $targetChar", origZy, 999_999_999))
 
-        // 後續各項：同音替換字
-        for ((index, homo) in homophones.withIndex()) {
-            val displayHomo = if (isSimplified) ChineseConverter.toSimplified(homo.word) else homo.word
-            popup.menu.add(0, index + 1, index + 1, displayHomo)
-        }
-
-        popup.setOnMenuItemClickListener { menuItem ->
-            triggerHapticFeedback()
-            val chosen: DictEntry = if (menuItem.itemId == 0) {
-                originalEntry
-            } else {
-                homophones[menuItem.itemId - 1]
+        for (h in homophones) {
+            if (h.word != targetChar.toString()) {
+                candidateItems.add(h)
             }
-            // 選定後上屏，並記錄到個人詞庫提高優先
-            selectCandidate(chosen)
-            true
         }
-        popup.show()
+
+        updateCandidateBar(candidateItems)
+    }
+
+    private fun applyHomophoneReplacement(entry: DictEntry) {
+        val baseWord = customComposingWord ?: engine.getTopComposingWord()
+        if (homophoneCharIndex in baseWord.indices) {
+            val sb = StringBuilder(baseWord)
+            sb.setCharAt(homophoneCharIndex, entry.word[0])
+            val newWord = sb.toString()
+            customComposingWord = newWord
+            val zhuyin = if (entry.zhuyin.isNotEmpty()) entry.zhuyin else engine.getZhuyinForChar(entry.word[0])
+            replacedCharsMap[homophoneCharIndex] = Pair(entry.word, zhuyin)
+
+            // 更新輸入框底線組字預覽（保持底線未確認狀態，讓使用者可繼續修改其他字）
+            val finalPreview = if (isSimplified) ChineseConverter.toSimplified(newWord) else newWord
+            currentInputConnection?.setComposingText(finalPreview, 1)
+        }
+        exitHomophoneSelectionMode()
+    }
+
+    private fun exitHomophoneSelectionMode() {
+        isHomophoneSelectionMode = false
+        homophoneCharIndex = -1
+        if (customComposingWord != null) {
+            val preview = customComposingWord!!
+            val candidates = mutableListOf<DictEntry>()
+            candidates.add(DictEntry(preview, "", 100_000_000))
+            candidates.addAll(engine.getCandidates().filter { it.word != preview })
+            updateCandidateBar(candidates)
+        } else {
+            updateCandidateBar(engine.getCandidates())
+        }
     }
 
     private fun showNextWordPredictions(word: String) {
@@ -1708,16 +1739,103 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     private fun selectCandidate(entry: DictEntry) {
         if (entry.word.startsWith("【")) return
-        commitProcessedText(entry.word)
-        lastCommittedWord = entry.word
-        com.bopomofo.t9ime.engine.UserDictionaryManager.getInstance(this).recordUsage(entry.word, entry.zhuyin)
+        val wordToCommit = if (customComposingWord != null && (entry.word == engine.getTopComposingWord() || entry.word == customComposingWord)) {
+            customComposingWord!!
+        } else {
+            entry.word
+        }
+        commitProcessedWordWithUserDict(wordToCommit, entry.zhuyin)
+    }
+
+    /**
+     * 詞彙確認上屏與個人詞庫記憶（等確定出去才紀錄成優選）
+     */
+    private fun commitProcessedWordWithUserDict(word: String, zhuyin: String = "") {
+        if (word.startsWith("【")) return
+        commitProcessedText(word)
+        lastCommittedWord = word
+
+        val userDict = com.bopomofo.t9ime.engine.UserDictionaryManager.getInstance(this)
+        // 1. 記錄選定確認的整組詞彙
+        userDict.recordUsage(word, zhuyin)
+
+        // 2. 記錄個別替換字及其注音，等確定出去才紀錄成優選
+        for ((_, pair) in replacedCharsMap) {
+            userDict.recordUsage(pair.first, pair.second)
+        }
+
+        // 3. 重設組字狀態
+        customComposingWord = null
+        replacedCharsMap.clear()
+        isHomophoneSelectionMode = false
+        homophoneCharIndex = -1
+        lastComposingStart = -1
+        lastComposingEnd = -1
+
         engine.clear()
         currentInputConnection?.finishComposingText()
         if (::handwritingCanvas.isInitialized) {
             handwritingCanvas.clearCanvas()
         }
         updateLeftZhuyinCombos()
-        showNextWordPredictions(entry.word)
+        showNextWordPredictions(word)
+    }
+
+    /**
+     * 監聽輸入框游標與選取區變更：
+     * 當使用者在輸入文字區內「長按選取」或點選底線候選字其中之一時，觸發同音字替換模式
+     */
+    override fun onUpdateSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+
+        if (candidatesStart >= 0) {
+            lastComposingStart = candidatesStart
+            lastComposingEnd = candidatesEnd
+        }
+
+        if (!engine.hasComposing()) {
+            lastComposingStart = -1
+            lastComposingEnd = -1
+            return
+        }
+
+        val currentWord = customComposingWord ?: engine.getTopComposingWord()
+        if (currentWord.isEmpty()) return
+
+        val cStart = if (candidatesStart >= 0) candidatesStart else lastComposingStart
+        val cEnd = if (candidatesEnd >= 0) candidatesEnd else lastComposingEnd
+        if (cStart < 0 || cEnd <= cStart) return
+
+        // IME 正常打字更新組字時，游標自動置於 cEnd（newSelStart == newSelEnd == cEnd），不觸發同音替換
+        if (newSelStart == newSelEnd && newSelStart == cEnd) {
+            return
+        }
+
+        // 判定使用者手動長按選取或點選組字區字元：
+        // 1. 長按選取：newSelStart != newSelEnd 且範圍在組字區內
+        // 2. 游標點選：newSelStart == newSelEnd 但落在組字區內部 (cStart <= newSelStart < cEnd)
+        val isSelection = newSelStart != newSelEnd && newSelStart >= cStart && newSelEnd <= cEnd
+        val isCursorInside = newSelStart == newSelEnd && newSelStart >= cStart && newSelStart < cEnd
+
+        if (isSelection || isCursorInside) {
+            val charIndex = (newSelStart - cStart).coerceIn(0, currentWord.length - 1)
+            if (isHomophoneSelectionMode && homophoneCharIndex == charIndex) {
+                return
+            }
+            triggerHapticFeedback()
+            enterHomophoneSelectionMode(charIndex)
+        } else if (newSelStart < cStart || newSelStart > cEnd) {
+            if (!isHomophoneSelectionMode) {
+                commitProcessedWordWithUserDict(currentWord)
+            }
+        }
     }
 
     // 實體鍵盤大千注音鍵位映射表 (標準 PC 鍵盤注音符號對應)
@@ -1773,15 +1891,8 @@ class ZhuyinInputMethodService : InputMethodService() {
             // B. Space 空白鍵
             if (keyCode == KeyEvent.KEYCODE_SPACE) {
                 if (engine.hasComposing()) {
-                    val candidates = engine.getCandidates()
-                    if (candidates.isNotEmpty()) {
-                        selectCandidate(candidates.first())
-                    } else {
-                        val top = engine.getTopComposingWord()
-                        commitProcessedText(top)
-                        engine.clear()
-                        currentInputConnection?.finishComposingText()
-                    }
+                    val topWord = customComposingWord ?: engine.getCandidates().firstOrNull()?.word ?: engine.getTopComposingWord()
+                    commitProcessedWordWithUserDict(topWord)
                     return true
                 } else {
                     commitTextDirectly(" ")

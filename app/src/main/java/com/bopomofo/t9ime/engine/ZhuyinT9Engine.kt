@@ -33,6 +33,8 @@ class ZhuyinT9Engine(private val context: Context) {
     private val userDict = UserDictionaryManager.getInstance(context)
     @Volatile
     private var nextWordMap = mutableMapOf<String, MutableList<DictEntry>>()
+    @Volatile
+    private var charZhuyinMap = mutableMapOf<Char, MutableList<String>>()
 
     @Volatile
     var isDictionaryLoaded = false
@@ -46,9 +48,9 @@ class ZhuyinT9Engine(private val context: Context) {
     }
 
     init {
-        loadUserDictionaryEntries(trie)
+        loadUserDictionaryEntries(trie, charZhuyinMap)
         userDict.onDictionaryChangedListener = {
-            loadUserDictionaryEntries(trie)
+            loadUserDictionaryEntries(trie, charZhuyinMap)
             if (currentKeys.isNotEmpty()) {
                 recalculate()
             }
@@ -60,12 +62,14 @@ class ZhuyinT9Engine(private val context: Context) {
         Thread({
             val newTrie = TrieDictionary()
             val newNextWordMap = mutableMapOf<String, MutableList<DictEntry>>()
-            loadDictionaryInternal(newTrie, newNextWordMap)
-            loadUserDictionaryEntries(newTrie)
+            val newCharZhuyinMap = mutableMapOf<Char, MutableList<String>>()
+            loadDictionaryInternal(newTrie, newNextWordMap, newCharZhuyinMap)
+            loadUserDictionaryEntries(newTrie, newCharZhuyinMap)
 
             mainHandler.post {
                 trie = newTrie
                 nextWordMap = newNextWordMap
+                charZhuyinMap = newCharZhuyinMap
                 isDictionaryLoaded = true
                 if (currentKeys.isNotEmpty()) {
                     recalculate()
@@ -75,13 +79,22 @@ class ZhuyinT9Engine(private val context: Context) {
         }, "ZhuyinT9DictLoader").start()
     }
 
-    private fun loadUserDictionaryEntries(targetTrie: TrieDictionary) {
+    private fun loadUserDictionaryEntries(
+        targetTrie: TrieDictionary,
+        targetCharZhuyinMap: MutableMap<Char, MutableList<String>>
+    ) {
         val userEntries = userDict.getAllEntries()
         for (u in userEntries) {
             if (u.zhuyin.isNotEmpty()) {
                 // 使用者選過的詞給予高優先權，確保出現在候選詞中
                 val weight = 5_000_000 + minOf(u.count * 6_000_000, 100_000_000)
                 targetTrie.insert(DictEntry(u.word, u.zhuyin, weight))
+                if (u.word.length == 1) {
+                    val list = targetCharZhuyinMap.getOrPut(u.word[0]) { ArrayList(2) }
+                    if (!list.contains(u.zhuyin)) {
+                        list.add(0, u.zhuyin)
+                    }
+                }
             }
         }
     }
@@ -93,7 +106,8 @@ class ZhuyinT9Engine(private val context: Context) {
 
     private fun loadDictionaryInternal(
         targetTrie: TrieDictionary,
-        targetNextWordMap: MutableMap<String, MutableList<DictEntry>>
+        targetNextWordMap: MutableMap<String, MutableList<DictEntry>>,
+        targetCharZhuyinMap: MutableMap<Char, MutableList<String>>
     ) {
         val nextWordTrack = mutableMapOf<String, HashSet<String>>()
         var accumulatedWeight = 0L
@@ -114,10 +128,14 @@ class ZhuyinT9Engine(private val context: Context) {
                         targetTrie.insert(entry)
                         accumulatedWeight += weight
 
-                        // 統計單字音節歷史頻率（教育部 429 個合法音節）
+                        // 統計單字音節歷史頻率（教育部 429 個合法音節）與記錄單字注音查表
                         if (word.length == 1) {
                             val cleanZhuyin = zhuyin.filter { it !in "ˇˋˊ˙" }
                             SyllableManager.addSyllableWeight(cleanZhuyin, weight)
+                            val list = targetCharZhuyinMap.getOrPut(word[0]) { ArrayList(2) }
+                            if (!list.contains(zhuyin)) {
+                                list.add(zhuyin)
+                            }
                         }
 
                         // 單次讀取時構建高頻接續聯想詞庫（weight >= 25 且使用 HashSet 快速去重）
@@ -460,11 +478,62 @@ class ZhuyinT9Engine(private val context: Context) {
     val currentCandidates: List<DictEntry>
         get() = cachedCandidates
 
+    fun getZhuyinForChar(ch: Char): String {
+        return charZhuyinMap[ch]?.firstOrNull() ?: ""
+    }
+
+    /**
+     * 單字同音/同拼法候選字查詢（供底線組字長按逐字替換使用）：
+     * 1. 依該字的注音找出相同音節（同聲調與不同聲調）
+     * 2. 依 9 鍵序列找出同按鍵拼法的字
+     * 3. 去重並依個人詞庫使用頻率與字典權重排序
+     */
+    fun getHomophonesForChar(ch: Char): List<DictEntry> {
+        val zhuyins = charZhuyinMap[ch] ?: emptyList()
+        val seen = LinkedHashSet<String>()
+        val results = mutableListOf<DictEntry>()
+
+        for (zy in zhuyins) {
+            val seqWithTone = KeyMapping.getSequence(zy, ignoreTones = false)
+            val seqNoTone = KeyMapping.getSequence(zy, ignoreTones = true)
+
+            for (seq in listOf(seqWithTone, seqNoTone).distinct()) {
+                if (seq.isEmpty()) continue
+                val node = trie.searchNode(seq) ?: continue
+                for (e in node.exactEntries) {
+                    if (e.word.length == 1 && seen.add(e.word)) {
+                        results.add(e)
+                    }
+                }
+            }
+        }
+
+        // 保底：若查無注音，從當前候選字表中提取所有單字
+        if (results.isEmpty()) {
+            for (c in cachedCandidates) {
+                if (c.word.length == 1 && seen.add(c.word)) {
+                    results.add(c)
+                }
+            }
+        }
+
+        val originalEntry = results.find { it.word == ch.toString() }
+            ?: DictEntry(ch.toString(), zhuyins.firstOrNull() ?: "", 1000)
+
+        val others = results.filter { it.word != ch.toString() }
+            .sortedByDescending { it.weight + userDict.getBoost(it.word) }
+
+        return listOf(originalEntry) + others.take(25)
+    }
+
     /**
      * 同音字查詢（長按候選詞用）：根據詞條的注音，從詞典 Trie 中取出所有相同按鍵序列的同音字/詞，
      * 排除詞本身，依個人化使用權重排序，供使用者替換選字。
      */
     fun getHomophonesFor(entry: DictEntry): List<DictEntry> {
+        if (entry.word.length == 1) {
+            return getHomophonesForChar(entry.word[0])
+        }
         val zhuyin = entry.zhuyin
         if (zhuyin.isEmpty()) return emptyList()
 
