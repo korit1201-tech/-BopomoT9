@@ -6,7 +6,8 @@ package com.bopomofo.t9ime.engine
 data class DictEntry(
     val word: String,
     val zhuyin: String,
-    val weight: Int
+    val weight: Int,
+    val isTolerant: Boolean = false
 )
 
 /**
@@ -32,11 +33,16 @@ class TrieDictionary {
         }
 
         // 僅對常用詞彙（詞長 <= 3 且 weight >= 60）進行跨鍵位容錯索引（避免 18 萬詞全面展開造成記憶體爆炸與 OOM）
-        if (entry.word.length <= 3 && entry.weight >= 60) {
+        if (entry.word.length <= 3 && entry.weight >= 60 && !entry.isTolerant) {
             val altSeqs = KeyMapping.getCrossKeyTolerantSequences(entry.zhuyin)
             for (altSeq in altSeqs) {
                 if (altSeq != seqNoTone && altSeq != seqWithTone) {
-                    val adjustedEntry = DictEntry(entry.word, entry.zhuyin, (entry.weight * 0.55).toInt())
+                    val adjustedEntry = DictEntry(
+                        entry.word,
+                        entry.zhuyin,
+                        (entry.weight * 0.35).toInt(),
+                        isTolerant = true
+                    )
                     insertSequence(altSeq, adjustedEntry)
                 }
             }
@@ -78,7 +84,12 @@ class TrieDictionary {
     fun searchExact(sequence: List<Int>): List<DictEntry> {
         if (sequence.isEmpty()) return emptyList()
         val targetNode = searchNode(sequence) ?: return emptyList()
-        return targetNode.exactEntries.distinctBy { it.word }.sortedByDescending { it.weight }
+        return targetNode.exactEntries
+            .distinctBy { it.word }
+            .sortedWith(
+                compareByDescending<DictEntry> { !it.isTolerant }
+                    .thenByDescending { it.weight }
+            )
     }
 
     fun searchPrefix(sequence: List<Int>, maxDepth: Int = 3): List<DictEntry> {
@@ -87,7 +98,13 @@ class TrieDictionary {
         val exactWords = targetNode.exactEntries.map { it.word }.toSet()
         val prefixList = mutableListOf<DictEntry>()
         collectPrefix(targetNode, prefixList, 0, maxDepth)
-        return prefixList.distinctBy { it.word }.filter { it.word !in exactWords }.sortedByDescending { it.weight }
+        return prefixList
+            .distinctBy { it.word }
+            .filter { it.word !in exactWords }
+            .sortedWith(
+                compareByDescending<DictEntry> { !it.isTolerant }
+                    .thenByDescending { it.weight }
+            )
     }
 
     private fun collectPrefix(node: TrieNode, results: MutableList<DictEntry>, depth: Int, maxDepth: Int) {

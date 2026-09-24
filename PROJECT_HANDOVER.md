@@ -1,6 +1,6 @@
 # 安卓注音九宮格輸入法 (Android BOPOMOFO T9) 專案交接與進度備忘錄
 
-> 本文件更新於 2026-09-23（版本 v1.5.1，versionCode: 9）。  
+> 本文件更新於 2026-09-24（版本 v1.6.0，versionCode: 10）。  
 > 目的：記錄目前系統核心架構、關鍵演算法與維護手冊。
 
 ---
@@ -9,11 +9,11 @@
 
 * **GitHub 倉庫**：`https://github.com/korit1201-tech/android-BOPOMOFO-t9.git`
 * **主分支**：`main`
-* **最新 Release**：`v1.5.1`（Git Tag: `v1.5.1`）
+* **最新 Release**：`v1.6.0`（Git Tag: `v1.6.0`）
 * **開發環境配置**：
-  * **Java JBR**：`C:\Program Files\Android\Android Studio\jbr`
-  * **Android SDK**：`C:\Users\Korit\AppData\Local\Android\Sdk`
-  * **ADB 工具**：`C:\Users\Korit\AppData\Local\Android\Sdk\platform-tools\adb.exe`
+  * **Java JBR**：`C:\Program Files\Android\Android Studio\jbr` 或 Linux OpenJDK 17
+  * **Android SDK**：`C:\Users\Korit\AppData\Local\Android\Sdk` 或 Linux `/data/android-sdk`
+  * **ADB 工具**：`platform-tools/adb`
   * **目標手機裝置代碼**：`3B1F4RE5MS13JZ5Z`
   * **目標 SDK**：CompileSdk 34 / MinSdk 24 / TargetSdk 34
   * **支援 ABI**：`arm64-v8a`, `armeabi-v7a`
@@ -29,11 +29,12 @@ app/src/main/
 │   └── dict_tw.txt                      # libchewing 官方 16 萬詞庫 (tsi.csv + word.csv，格式：詞\t注音\t權重)
 ├── java/com/bopomofo/t9ime/
 │   ├── MainActivity.kt                  # 設定引導、個人詞庫 SAF 匯入匯出、按鍵震動開關與滑桿強度調整
-│   ├── ZhuyinInputMethodService.kt      # 輸入法核心生命週期、按鍵事件分發、震動回饋、實體鍵盤監聽
+│   ├── ZhuyinInputMethodService.kt      # 輸入法核心生命週期、按鍵事件分發、View Pool 候選字與音節重用、震動回饋
 │   ├── engine/
+│   │   ├── SyllableManager.kt           # 教育部 429 個合法注音音節圖管理、正向按鍵反查、音節歷史頻率排序
 │   │   ├── KeyMapping.kt                # 12 鍵注音鍵位映射表、零韻母口語容錯（ㄕㄜㄇㄜ=什麼）規則
-│   │   ├── TrieDictionary.kt            # 前綴樹 (Trie) 詞典引擎、階梯式 exact 與 prefix 分層搜尋
-│   │   ├── ZhuyinT9Engine.kt            # T9 解碼調度器、階梯式候選詞排序、DP 全域分詞、libchewing 接續聯想詞
+│   │   ├── TrieDictionary.kt            # 前綴樹 (Trie) 詞典引擎、階梯式 exact 與 prefix 分層搜尋、容錯分級
+│   │   ├── ZhuyinT9Engine.kt            # T9 解碼調度器、階梯式候選詞排序、Unigram DP 全域分詞與前綴回退保底
 │   │   ├── UserDictionaryManager.kt     # 本機學習詞庫管理器（記憶體計數、2.5 秒防抖延遲寫檔）
 │   │   ├── ChineseConverter.kt          # 繁簡字元轉換器
 │   │   └── GoogleHandwritingRecognizer.kt# Google ML Kit 端側手寫辨識引擎 (zh-Hant)

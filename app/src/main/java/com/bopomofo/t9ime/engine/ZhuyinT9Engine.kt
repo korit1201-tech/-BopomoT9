@@ -82,11 +82,17 @@ class ZhuyinT9Engine(private val context: Context) {
         }
     }
 
+    @Volatile
+    private var totalDictWeight: Long = 60_000_000L
+    @Volatile
+    private var logTotalWeight: Double = 17.91
+
     private fun loadDictionaryInternal(
         targetTrie: TrieDictionary,
         targetNextWordMap: MutableMap<String, MutableList<DictEntry>>
     ) {
         val nextWordTrack = mutableMapOf<String, HashSet<String>>()
+        var accumulatedWeight = 0L
         try {
             context.assets.open("dict_tw.txt").use { inputStream ->
                 BufferedReader(InputStreamReader(inputStream), 65536).useLines { lines ->
@@ -102,6 +108,13 @@ class ZhuyinT9Engine(private val context: Context) {
 
                         val entry = DictEntry(word, zhuyin, weight)
                         targetTrie.insert(entry)
+                        accumulatedWeight += weight
+
+                        // 統計單字音節歷史頻率（教育部 429 個合法音節）
+                        if (word.length == 1) {
+                            val cleanZhuyin = zhuyin.filter { it !in "ˇˋˊ˙" }
+                            SyllableManager.addSyllableWeight(cleanZhuyin, weight)
+                        }
 
                         // 單次讀取時構建高頻接續聯想詞庫（weight >= 25 且使用 HashSet 快速去重）
                         if (word.length in 2..4 && weight >= 25) {
@@ -127,6 +140,9 @@ class ZhuyinT9Engine(private val context: Context) {
                     }
                 }
             }
+
+            totalDictWeight = accumulatedWeight
+            logTotalWeight = Math.log(maxOf(accumulatedWeight.toDouble(), 1.0))
 
             for ((_, list) in targetNextWordMap) {
                 list.sortByDescending { it.weight }
@@ -184,7 +200,8 @@ class ZhuyinT9Engine(private val context: Context) {
     fun hasComposing(): Boolean = currentKeys.isNotEmpty()
 
     fun selectZhuyinCombo(zhuyin: String): List<DictEntry> {
-        lockedZhuyinCombo = zhuyin
+        // 點選同一個音節按鈕支援切換解除鎖定 (Toggle)
+        lockedZhuyinCombo = if (lockedZhuyinCombo == zhuyin) null else zhuyin
         recalculateCandidatesOnly()
         return cachedCandidates
     }
@@ -210,10 +227,11 @@ class ZhuyinT9Engine(private val context: Context) {
             } else list
         }
 
-        // Tier 1: 完全匹配詞排序（使用者常選詞穩居第一位）
-        val rankedExact = filterTone(exactResults).sortedByDescending {
-            it.weight + userDict.getBoost(it.word)
-        }
+        // Tier 1: 完全匹配詞排序（使用者常選詞穩居第一位，原生匹配字優先於容錯字）
+        val rankedExact = filterTone(exactResults).sortedWith(
+            compareByDescending<DictEntry> { !it.isTolerant }
+                .thenByDescending { it.weight + userDict.getBoost(it.word) }
+        )
 
         // Tier 2: DP 最佳長句分詞（一口氣輸入較長句子 >= 4 鍵時）
         val segmentedSentence = if (currentKeys.size >= 4) {
@@ -221,9 +239,10 @@ class ZhuyinT9Engine(private val context: Context) {
         } else null
 
         // Tier 3: 前綴預測詞排序
-        val rankedPrefix = filterTone(prefixResults).sortedByDescending {
-            it.weight + userDict.getBoost(it.word)
-        }
+        val rankedPrefix = filterTone(prefixResults).sortedWith(
+            compareByDescending<DictEntry> { !it.isTolerant }
+                .thenByDescending { it.weight + userDict.getBoost(it.word) }
+        )
 
         // 組合候選詞（階梯式嚴格優先級）：
         // 1. 若無字典完全匹配詞（純連續打長句子），DP 分詞預測的中文句子直接置頂排在第一位（藍色高亮）！
@@ -243,17 +262,27 @@ class ZhuyinT9Engine(private val context: Context) {
             candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
         }
 
-        // 計算純注音按鍵長度（排除聲調鍵 K11）
-        val phonemeKeyLen = currentKeys.count { it != 11 }
+        // 產生左側合法注音音節列表（基於教育部 429 個合法音節與實際按鍵，徹底告別暴力截斷與殘缺拼音）
+        val cleanKeys = currentKeys.filter { it != 11 }
+        val exactSyllables = SyllableManager.getExactSyllables(cleanKeys)
+        val rawCombos = if (exactSyllables.isNotEmpty()) {
+            exactSyllables
+        } else {
+            val prefixSyls = SyllableManager.getPrefixSyllables(cleanKeys, maxCount = 8)
+            if (prefixSyls.isNotEmpty()) {
+                prefixSyls
+            } else {
+                // 若鍵數較長（連續長句），取最後 1~2 鍵推導當前正在輸入的音節
+                val tailKeys = if (cleanKeys.size >= 2) cleanKeys.takeLast(2) else cleanKeys
+                val tailExact = SyllableManager.getExactSyllables(tailKeys)
+                if (tailExact.isNotEmpty()) tailExact else emptyList()
+            }
+        }
 
-        // 從 top 候選詞抽取注音前綴組合（最多 4 個，避免雜訊）
         val comboSet = LinkedHashSet<String>()
-        for (entry in candidateList) {
-            val clean  = entry.zhuyin.filter { it !in "ˇˋˊ˙" }
-            val prefix = if (clean.length >= phonemeKeyLen) clean.substring(0, phonemeKeyLen) else clean
-            val label  = if (toneChar != null) "$prefix$toneChar" else prefix
-            if (label.isNotEmpty()) comboSet.add(label)
-            if (comboSet.size >= 4) break
+        for (syl in rawCombos) {
+            val label = if (toneChar != null) "$syl$toneChar" else syl
+            comboSet.add(label)
         }
 
         if (comboSet.isEmpty()) {
@@ -272,7 +301,8 @@ class ZhuyinT9Engine(private val context: Context) {
 
     /**
      * 動態規劃 (DP / Viterbi) 全域最佳分詞演算法
-     * 當一口氣輸入較長句子時，從詞庫中尋找最合理的多詞組合並合成中文
+     * 採用標準 Unigram 對數機率模型 + 成詞長度偏置 + 前綴回退保底機制，
+     * 徹底消弭「切得越碎分數越高」的數學謬誤，確保長句連續輸入流暢準確，打到一半絕不卡死空白。
      */
     private fun findBestSentence(keys: List<Int>): DictEntry? {
         val n = keys.size
@@ -282,33 +312,55 @@ class ZhuyinT9Engine(private val context: Context) {
         dp[0] = 0.0
         val bestSplit = arrayOfNulls<Pair<Int, DictEntry>>(n + 1)
 
+        val wordBonus = 2.5
+        val logTotal = if (logTotalWeight > 0) logTotalWeight else 17.91
+
         for (i in 1..n) {
-            val maxLen = minOf(8, i)
+            val maxLen = minOf(12, i)
             for (len in 1..maxLen) {
                 val j = i - len
                 if (dp[j] != Double.NEGATIVE_INFINITY) {
                     val subKeys = keys.subList(j, i)
                     val node = trie.searchNode(subKeys)
                     if (node != null && node.exactEntries.isNotEmpty()) {
-                        val best = node.exactEntries.maxByOrNull { it.weight + userDict.getBoost(it.word) }!!
-                        val lengthMultiplier = Math.pow(len.toDouble(), 1.25)
-                        val score = dp[j] + Math.log(maxOf(best.weight.toDouble(), 10.0)) * lengthMultiplier
-                        if (score > dp[i]) {
-                            dp[i] = score
-                            bestSplit[i] = Pair(j, best)
+                        for (entry in node.exactEntries) {
+                            val boost = userDict.getBoost(entry.word)
+                            val effectiveWeight = entry.weight + boost
+                            val logProb = Math.log(maxOf(effectiveWeight.toDouble(), 1.0)) - logTotal
+                            val bonus = (entry.word.length - 1) * wordBonus
+                            val penalty = if (entry.isTolerant) -5.0 else 0.0
+                            val score = dp[j] + logProb + bonus + penalty
+                            if (score > dp[i]) {
+                                dp[i] = score
+                                bestSplit[i] = Pair(j, entry)
+                            }
                         }
                     }
                 }
             }
         }
 
+        // 判定整句是否能完整打通到結尾 n
+        var targetEnd = n
         if (dp[n] == Double.NEGATIVE_INFINITY) {
-            return null
+            // 前綴回退保底：整句末尾可能尚未打完（如輸入到一半的單音），尋找最大有效切點
+            var bestJ = -1
+            for (j in (n - 1) downTo 2) {
+                if (dp[j] != Double.NEGATIVE_INFINITY) {
+                    bestJ = j
+                    break
+                }
+            }
+            if (bestJ > 0) {
+                targetEnd = bestJ
+            } else {
+                return null
+            }
         }
 
         val words = mutableListOf<String>()
         val zhuyins = mutableListOf<String>()
-        var curr = n
+        var curr = targetEnd
         while (curr > 0) {
             val split = bestSplit[curr] ?: return null
             words.add(split.second.word)
@@ -317,6 +369,17 @@ class ZhuyinT9Engine(private val context: Context) {
         }
         words.reverse()
         zhuyins.reverse()
+
+        // 若發生回退（targetEnd < n），抓取未完按鍵後綴的最佳候選詞進行組合呈現
+        if (targetEnd < n) {
+            val remKeys = keys.subList(targetEnd, n)
+            val remNode = trie.searchNode(remKeys)
+            val remBest = remNode?.exactEntries?.maxByOrNull { it.weight + userDict.getBoost(it.word) }
+            if (remBest != null) {
+                words.add(remBest.word)
+                zhuyins.add(remBest.zhuyin)
+            }
+        }
 
         if (words.size > 1) {
             return DictEntry(words.joinToString(""), zhuyins.joinToString(""), 100_000_000)

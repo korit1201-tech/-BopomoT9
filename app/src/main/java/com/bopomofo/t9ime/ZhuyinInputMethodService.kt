@@ -82,6 +82,8 @@ class ZhuyinInputMethodService : InputMethodService() {
     private lateinit var layoutSymbols: LinearLayout
     private lateinit var scrollZhuyinCombos: ScrollView
     private lateinit var containerZhuyinCombos: LinearLayout
+    private val candidateTextViewPool = ArrayList<TextView>()
+    private val comboButtonPool = ArrayList<Button>()
 
     private lateinit var layout12Key: LinearLayout
     private lateinit var layoutQwerty: LinearLayout
@@ -1463,79 +1465,113 @@ class ZhuyinInputMethodService : InputMethodService() {
         if (!engine.hasComposing() || currentMode != KeyboardMode.ZHUYIN) {
             layoutSymbols.visibility = View.VISIBLE
             scrollZhuyinCombos.visibility = View.GONE
-            containerZhuyinCombos.removeAllViews()
+            for (btn in comboButtonPool) {
+                btn.visibility = View.GONE
+            }
             return
         }
 
         layoutSymbols.visibility = View.GONE
         scrollZhuyinCombos.visibility = View.VISIBLE
-        containerZhuyinCombos.removeAllViews()
 
         val combos = engine.getPossibleZhuyinCombinations()
         val density = resources.displayMetrics.density
         val btnHeightPx = (50 * density).toInt()
+        val count = combos.size
 
-        for (combo in combos) {
-            val btn = Button(this).apply {
-                text = combo
-                textSize = 15f
-                setTextColor(Color.parseColor("#E65100"))
-                setBackgroundResource(R.drawable.bg_zhuyin_combo)
-                gravity = Gravity.CENTER
-                val params = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    btnHeightPx
-                ).apply {
-                    setMargins(2, 2, 2, 2)
-                }
-                layoutParams = params
-                setOnClickListener {
-                    triggerHapticFeedback()
-                    val filtered = engine.selectZhuyinCombo(combo)
-                    updateCandidateBar(filtered)
-                    updateComposingPreview()
+        for (i in 0 until count) {
+            val combo = combos[i]
+            val btn = if (i < comboButtonPool.size) {
+                comboButtonPool[i]
+            } else {
+                Button(this).apply {
+                    textSize = 15f
+                    setTextColor(Color.parseColor("#E65100"))
+                    setBackgroundResource(R.drawable.bg_zhuyin_combo)
+                    gravity = Gravity.CENTER
+                    val params = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        btnHeightPx
+                    ).apply {
+                        setMargins(2, 2, 2, 2)
+                    }
+                    layoutParams = params
+                    containerZhuyinCombos.addView(this)
+                    comboButtonPool.add(this)
                 }
             }
-            containerZhuyinCombos.addView(btn)
+
+            btn.text = combo
+            btn.setOnClickListener {
+                triggerHapticFeedback()
+                val filtered = engine.selectZhuyinCombo(combo)
+                updateCandidateBar(filtered)
+                updateComposingPreview()
+            }
+            btn.visibility = View.VISIBLE
+        }
+
+        for (i in count until comboButtonPool.size) {
+            comboButtonPool[i].visibility = View.GONE
         }
     }
 
     private fun updateCandidateBar(candidates: List<DictEntry>) {
-        candidateContainer.removeAllViews()
+        val displayCandidates = candidates.take(MAX_CANDIDATES_DISPLAY)
+        val count = displayCandidates.size
 
-        if (candidates.isEmpty()) {
-            return
-        }
-
-        for ((index, entry) in candidates.take(MAX_CANDIDATES_DISPLAY).withIndex()) {
+        for (i in 0 until count) {
+            val entry = displayCandidates[i]
             val displayWord = if (isSimplified) ChineseConverter.toSimplified(entry.word) else entry.word
-            val tv = TextView(this).apply {
-                text = displayWord
-                textSize = 20f
-                setPadding(CANDIDATE_BAR_PADDING_PX, CANDIDATE_BAR_PADDING_VERTICAL_PX, CANDIDATE_BAR_PADDING_PX, CANDIDATE_BAR_PADDING_VERTICAL_PX)
-                setTextColor(
-                    if (index == 0) ContextCompat.getColor(context, R.color.kb_candidate_text)
-                    else ContextCompat.getColor(context, R.color.kb_text_primary)
-                )
-                setOnClickListener {
-                    triggerHapticFeedback()
-                    selectCandidate(entry)
+
+            val tv = if (i < candidateTextViewPool.size) {
+                candidateTextViewPool[i]
+            } else {
+                TextView(this).apply {
+                    textSize = 20f
+                    setPadding(
+                        CANDIDATE_BAR_PADDING_PX,
+                        CANDIDATE_BAR_PADDING_VERTICAL_PX,
+                        CANDIDATE_BAR_PADDING_PX,
+                        CANDIDATE_BAR_PADDING_VERTICAL_PX
+                    )
+                    candidateContainer.addView(this)
+                    candidateTextViewPool.add(this)
                 }
             }
-            candidateContainer.addView(tv)
+
+            tv.text = displayWord
+            tv.setTextColor(
+                if (i == 0) ContextCompat.getColor(this, R.color.kb_candidate_text)
+                else ContextCompat.getColor(this, R.color.kb_text_primary)
+            )
+            tv.setOnClickListener {
+                triggerHapticFeedback()
+                selectCandidate(entry)
+            }
+            tv.visibility = View.VISIBLE
+        }
+
+        for (i in count until candidateTextViewPool.size) {
+            candidateTextViewPool[i].visibility = View.GONE
         }
     }
 
     private fun showNextWordPredictions(word: String) {
         if (word.isEmpty()) {
-            candidateContainer.removeAllViews()
+            for (tv in candidateTextViewPool) {
+                tv.visibility = View.GONE
+            }
             return
         }
+
         val predictions = engine.getNextWordPredictions(word)
         if (predictions.isNotEmpty()) {
             updateCandidateBar(predictions)
         } else {
-            candidateContainer.removeAllViews()
+            for (tv in candidateTextViewPool) {
+                tv.visibility = View.GONE
+            }
         }
     }
 
