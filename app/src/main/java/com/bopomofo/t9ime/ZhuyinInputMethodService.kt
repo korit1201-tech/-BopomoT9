@@ -17,6 +17,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -78,6 +79,7 @@ class ZhuyinInputMethodService : InputMethodService() {
     private val MULTI_TAP_TIMEOUT = 1000L // 1 秒內連按同一鍵切換字母
 
     private lateinit var engine: ZhuyinT9Engine
+    private var candidateScroll: HorizontalScrollView? = null
     private lateinit var candidateContainer: LinearLayout
     private lateinit var layoutSymbols: LinearLayout
     private lateinit var scrollZhuyinCombos: ScrollView
@@ -183,6 +185,7 @@ class ZhuyinInputMethodService : InputMethodService() {
     override fun onCreateInputView(): View {
         val root = layoutInflater.inflate(R.layout.keyboard_view, null)
         rootView = root
+        candidateScroll = root.findViewById(R.id.candidate_scroll)
         candidateContainer = root.findViewById(R.id.candidate_container)
         layoutSymbols = root.findViewById(R.id.layout_symbols)
         scrollZhuyinCombos = root.findViewById(R.id.scroll_zhuyin_combos)
@@ -301,7 +304,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                         }
                     }
                     KeyboardMode.NUMBER_SYM -> {
-                        handleCombinedNumberEnglishTap(keyNum)
+                        commitTextDirectly(getNumberChar(keyNum))
                     }
                     KeyboardMode.ENGLISH_T9 -> {
                         handleT9EnglishTap(keyNum)
@@ -318,11 +321,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                         if (zhuyin != null) commitTextDirectly(zhuyin.toString())
                     }
                     KeyboardMode.NUMBER_SYM -> {
-                        val str = getNumberSwipe(keyNum, direction)
-                        if (str != null) {
-                            commitTextDirectly(str)
-                            resetT9MultiTap()
-                        }
+                        // 純數字模式不提供英文滑動輸入
                     }
                     KeyboardMode.ENGLISH_T9 -> {
                         val letter = getT9EnglishSwipe(keyNum, direction)
@@ -347,10 +346,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                         }
                     }
                     KeyboardMode.NUMBER_SYM -> {
-                        for (dir in SwipeKeyButton.Direction.values()) {
-                            val s = getNumberSwipe(keyNum, dir)
-                            if (s != null) map[dir] = s
-                        }
+                        // 純數字模式不顯示十字滑動字母指示盤
                     }
                     KeyboardMode.ENGLISH_T9 -> {
                         for (dir in SwipeKeyButton.Direction.values()) {
@@ -617,8 +613,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             layoutParams = params
             setOnClickListener {
                 triggerHapticFeedback()
-                currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
-                currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+                performEnterAction()
             }
         }
         row3?.addView(btnQwertyEnter)
@@ -753,13 +748,12 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         updateSymbolsDisplay()
 
-        // @ 位置：中文模式下改為換行(ENTER)鍵，英文/數字模式保留 @
+        // @ 位置：中文模式下改為確認/換行(ENTER)鍵，英文/數字模式保留 @
         btnSymAt.setOnClickListener {
             triggerHapticFeedback()
             when (currentMode) {
                 KeyboardMode.ZHUYIN, KeyboardMode.HANDWRITING -> {
-                    currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
-                    currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+                    performEnterAction()
                 }
                 else -> commitSymbol("@")
             }
@@ -785,15 +779,13 @@ class ZhuyinInputMethodService : InputMethodService() {
             }
         }
 
-        // 清空按鈕：NUMBER_SYM（數字/英文混合）模式下改為換行鍵
+        // 清空按鈕：NUMBER_SYM 模式下改為換行鍵
         btnClear = root.findViewById(R.id.btn_clear)
         btnClear?.setOnClickListener {
             triggerHapticFeedback()
             when (currentMode) {
                 KeyboardMode.NUMBER_SYM -> {
-                    // 數字/英文混合模式下沒有組字緩衝，清空位置改為換行鍵
-                    currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
-                    currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+                    performEnterAction()
                 }
                 else -> {
                     engine.clear()
@@ -803,6 +795,32 @@ class ZhuyinInputMethodService : InputMethodService() {
                     refreshUI(emptyList())
                 }
             }
+        }
+    }
+
+    /**
+     * Enter 鍵動作處理：
+     * - 若處於組字未決定狀態（hasComposing），按下 Enter 視為確認（上屏首選字/預測句子），不換行。
+     * - 若無組字狀態，則送出正常的換行 (KEYCODE_ENTER) 事件。
+     */
+    private fun performEnterAction() {
+        if (engine.hasComposing()) {
+            val candidates = engine.getCandidates()
+            if (candidates.isNotEmpty()) {
+                selectCandidate(candidates.first())
+            } else {
+                val topWord = engine.getTopComposingWord()
+                if (topWord.isNotEmpty()) {
+                    commitProcessedText(topWord)
+                }
+                engine.clear()
+                lastCommittedWord = topWord
+                currentInputConnection?.finishComposingText()
+                refreshUI(emptyList())
+            }
+        } else {
+            currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
+            currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
         }
     }
 
@@ -1274,20 +1292,16 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun update12KeyLabelsNumbers() {
-        // 數字模式：主數字放大粗體顯眼，次要符號與字母縮小展示
-        val caseT = { s: String -> if (isCapsLock) s.uppercase() else s }
-        set12KeyText(1,  formatNumberKeyLabel("1", "@ . _"))
-        set12KeyText(2,  formatNumberKeyLabel("2", caseT("a b c")))
-        set12KeyText(3,  formatNumberKeyLabel("3", caseT("d e f")))
-        set12KeyText(4,  formatNumberKeyLabel("4", caseT("g h i")))
-        set12KeyText(5,  formatNumberKeyLabel("5", caseT("j k l")))
-        set12KeyText(6,  formatNumberKeyLabel("6", caseT("m n o")))
-        set12KeyText(7,  formatNumberKeyLabel("7", caseT("p q r s")))
-        set12KeyText(8,  formatNumberKeyLabel("8", caseT("t u v")))
-        set12KeyText(9,  formatNumberKeyLabel("9", caseT("w x y z")))
-        set12KeyText(10, formatNumberKeyLabel(".", "- + *"))
-        set12KeyText(11, formatNumberKeyLabel("0", "/ = )"))
-        set12KeyText(12, formatNumberKeyLabel("#", "% & !"))
+        // 純數字模式：僅顯示大號粗體數字與主符號，移除英文字母
+        for (i in 1..12) {
+            val numStr = getNumberChar(i)
+            val spannable = SpannableString(numStr).apply {
+                setSpan(RelativeSizeSpan(1.4f), 0, numStr.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(StyleSpan(Typeface.BOLD), 0, numStr.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(ForegroundColorSpan(ContextCompat.getColor(this@ZhuyinInputMethodService, R.color.kb_text_primary)), 0, numStr.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            set12KeyText(i, spannable)
+        }
     }
 
     private fun update12KeyLabelsT9English() {
@@ -1555,6 +1569,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         for (i in count until candidateTextViewPool.size) {
             candidateTextViewPool[i].visibility = View.GONE
         }
+        candidateScroll?.scrollTo(0, 0)
     }
 
     private fun showNextWordPredictions(word: String) {
@@ -1573,6 +1588,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 tv.visibility = View.GONE
             }
         }
+        candidateScroll?.scrollTo(0, 0)
     }
 
     private fun selectCandidate(entry: DictEntry) {
@@ -1658,13 +1674,10 @@ class ZhuyinInputMethodService : InputMethodService() {
                 }
             }
 
-            // C. Enter 鍵確認直接送出當前注音
+            // C. Enter 鍵確認直接送出當前注音/預測候選
             if (keyCode == KeyEvent.KEYCODE_ENTER) {
                 if (engine.hasComposing()) {
-                    val top = engine.getTopComposingWord()
-                    commitProcessedText(top)
-                    engine.clear()
-                    currentInputConnection?.finishComposingText()
+                    performEnterAction()
                     return true
                 }
                 return super.onKeyDown(keyCode, event)

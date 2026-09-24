@@ -245,18 +245,13 @@ class ZhuyinT9Engine(private val context: Context) {
         )
 
         // 組合候選詞（階梯式嚴格優先級）：
-        // 1. 若無字典完全匹配詞（純連續打長句子），DP 分詞預測的中文句子直接置頂排在第一位（藍色高亮）！
-        // 2. 若有完全匹配詞，常選詞/完全匹配排第一，預測長句緊跟其後，子節點長詞永遠排在最後！
+        // 1. 若有 DP 分詞預測的中文句子/長詞，直接置頂排在第一位（藍色高亮）！
+        // 2. 隨後排列完全匹配詞 (rankedExact)，最後排列前綴延伸詞 (rankedPrefix)
         val candidateList = mutableListOf<DictEntry>()
-        if (segmentedSentence != null && rankedExact.none { it.word == segmentedSentence.word }) {
-            if (rankedExact.isEmpty()) {
-                candidateList.add(segmentedSentence)
-                candidateList.addAll(rankedPrefix.filter { it.word != segmentedSentence.word })
-            } else {
-                candidateList.addAll(rankedExact)
-                candidateList.add(segmentedSentence)
-                candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
-            }
+        if (segmentedSentence != null) {
+            candidateList.add(segmentedSentence)
+            candidateList.addAll(rankedExact.filter { it.word != segmentedSentence.word })
+            candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
         } else {
             candidateList.addAll(rankedExact)
             candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
@@ -370,19 +365,22 @@ class ZhuyinT9Engine(private val context: Context) {
         words.reverse()
         zhuyins.reverse()
 
-        // 若發生回退（targetEnd < n），抓取未完按鍵後綴的最佳候選詞進行組合呈現
+        // 若發生回退（targetEnd < n），抓取未完按鍵後綴的最佳候選詞或前綴進行組合呈現
         if (targetEnd < n) {
             val remKeys = keys.subList(targetEnd, n)
-            val remNode = trie.searchNode(remKeys)
-            val remBest = remNode?.exactEntries?.maxByOrNull { it.weight + userDict.getBoost(it.word) }
+            val remExact = trie.searchExact(remKeys).firstOrNull()
+            val remBest = remExact ?: trie.searchPrefix(remKeys, maxDepth = 2).firstOrNull()
             if (remBest != null) {
                 words.add(remBest.word)
                 zhuyins.add(remBest.zhuyin)
             }
         }
 
-        if (words.size > 1) {
-            return DictEntry(words.joinToString(""), zhuyins.joinToString(""), 100_000_000)
+        if (words.isNotEmpty()) {
+            val combinedWord = words.joinToString("")
+            if (combinedWord.length >= 2) {
+                return DictEntry(combinedWord, zhuyins.joinToString(""), 100_000_000)
+            }
         }
         return null
     }
@@ -420,38 +418,90 @@ class ZhuyinT9Engine(private val context: Context) {
     }
 
     /**
+     * 常用對話接續聯想詞保底（台灣生活語境高頻詞）
+     */
+    private val defaultAssociations = mapOf(
+        "你" to listOf("好", "在幹嘛", "在哪裡", "覺得呢", "知道嗎", "可以嗎", "有空嗎", "要不要", "們"),
+        "你好" to listOf("！", "，", "請問", "我是", "早安", "晚安", "歡迎", "大家", "嗎"),
+        "我" to listOf("是", "在", "想", "要", "知道", "覺得", "喜歡", "今天", "現在", "可以", "們"),
+        "他" to listOf("是", "說", "在", "想", "要", "知道", "今天", "去哪", "們"),
+        "她" to listOf("是", "說", "在", "想", "要", "知道", "今天", "們"),
+        "謝謝" to listOf("你", "您", "大家", "配合", "分享", "幫忙", "！"),
+        "貢丸" to listOf("湯", "好吃", "新竹", "麵", "米粉"),
+        "台灣" to listOf("高鐵", "大學", "美食", "天氣", "啤酒", "銀行"),
+        "今天" to listOf("天氣", "晚上", "中午", "早上", "星期幾", "要吃什麼", "好累"),
+        "明天" to listOf("見", "早上", "晚上", "下午", "放假", "要開會"),
+        "什麼" to listOf("時候", "意思", "名字", "東西", "事情", "原因"),
+        "怎麼" to listOf("了", "樣", "辦", "去", "做", "會這樣", "聯絡"),
+        "可以" to listOf("嗎", "幫我", "直接", "一起", "考慮", "使用"),
+        "沒問題" to listOf("！", "，我來處理", "，交給我", "馬上辦"),
+        "大家" to listOf("好", "早安", "晚安", "辛苦了", "注意安全"),
+        "早安" to listOf("！", "，祝你有美好的一天", "，今天好冷"),
+        "晚安" to listOf("！", "，祝好夢", "，明天見"),
+        "工作" to listOf("順利", "認真", "人員", "愉快", "機會")
+    )
+
+    /**
      * 接續詞預測（聯想詞）
-     * 100% 基於 libchewing 官方 16 萬詞庫在開機載入時建置的真實繁體詞頻索引，零硬編碼，零磁碟重複讀取！
+     * 結合 libchewing 官方 16 萬詞庫語料索引與台灣地道高頻接續詞
      */
     fun getNextWordPredictions(word: String): List<DictEntry> {
         if (word.isEmpty()) return emptyList()
 
         val rankList = { list: List<DictEntry> ->
-            list.sortedByDescending { it.weight + userDict.getBoost(it.word) }.take(10)
+            list.sortedByDescending { it.weight + userDict.getBoost(it.word) }
         }
+
+        val resultList = mutableListOf<DictEntry>()
 
         // 1. 完全匹配剛上屏詞彙
         val exactList = nextWordMap[word]
         if (!exactList.isNullOrEmpty()) {
-            return rankList(exactList)
+            resultList.addAll(rankList(exactList))
         }
 
-        // 2. 結尾 2 字匹配（如選了長詞，取末尾詞接續）
+        // 2. 常用對話聯想規則匹配
+        val defaultMatches = defaultAssociations[word]
+        if (!defaultMatches.isNullOrEmpty()) {
+            for (w in defaultMatches) {
+                if (resultList.none { it.word == w }) {
+                    resultList.add(DictEntry(w, "", 10_000))
+                }
+            }
+        }
+
+        // 3. 結尾 2 字匹配（如選了長詞，取末尾詞接續）
         if (word.length >= 2) {
             val suffix2 = word.takeLast(2)
             val list2 = nextWordMap[suffix2]
             if (!list2.isNullOrEmpty()) {
-                return rankList(list2)
+                for (e in rankList(list2)) {
+                    if (resultList.none { it.word == e.word }) resultList.add(e)
+                }
+            }
+            val def2 = defaultAssociations[suffix2]
+            if (!def2.isNullOrEmpty()) {
+                for (w in def2) {
+                    if (resultList.none { it.word == w }) resultList.add(DictEntry(w, "", 8_000))
+                }
             }
         }
 
-        // 3. 結尾單字匹配
+        // 4. 結尾單字匹配
         val suffix1 = word.takeLast(1)
         val list1 = nextWordMap[suffix1]
         if (!list1.isNullOrEmpty()) {
-            return rankList(list1)
+            for (e in rankList(list1)) {
+                if (resultList.none { it.word == e.word }) resultList.add(e)
+            }
+        }
+        val def1 = defaultAssociations[suffix1]
+        if (!def1.isNullOrEmpty()) {
+            for (w in def1) {
+                if (resultList.none { it.word == w }) resultList.add(DictEntry(w, "", 5_000))
+            }
         }
 
-        return emptyList()
+        return resultList.take(15)
     }
 }
