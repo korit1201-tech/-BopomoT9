@@ -1624,6 +1624,14 @@ class ZhuyinInputMethodService : InputMethodService() {
                 triggerHapticFeedback()
                 selectCandidate(entry)
             }
+
+            // 長按候選詞 → 彈出同音替換字選單（1.6.5 新功能）
+            tv.setOnLongClickListener {
+                triggerHapticFeedback()
+                showHomophonePopup(it, entry)
+                true
+            }
+
             tv.visibility = View.VISIBLE
         }
 
@@ -1635,6 +1643,53 @@ class ZhuyinInputMethodService : InputMethodService() {
             val canScroll = candidateContainer.width > (candidateScroll?.width ?: 0)
             candidateMoreIndicator?.visibility = if (canScroll) View.VISIBLE else View.GONE
         }
+    }
+
+    /**
+     * 長按候選詞同音替換選單（1.6.5）
+     *
+     * 從詞典中找出與該詞條相同注音的所有同音字/詞，以 PopupMenu 呈現。
+     * 使用者選擇後：
+     * 1. 將選取的同音字上屏（替換原本預測詞）
+     * 2. 在個人詞庫中記錄該字的使用，提升其未來排序優先級
+     */
+    private fun showHomophonePopup(anchor: View, originalEntry: DictEntry) {
+        if (originalEntry.zhuyin.isEmpty()) {
+            // 接續預測詞沒有注音資訊，改為直接選字上屏
+            selectCandidate(originalEntry)
+            return
+        }
+
+        val homophones = engine.getHomophonesFor(originalEntry)
+        if (homophones.isEmpty()) {
+            // 沒有同音字，直接確認此字
+            selectCandidate(originalEntry)
+            return
+        }
+
+        val popup = android.widget.PopupMenu(this, anchor)
+
+        // 第一項：原始詞本身（作為確認選項）
+        popup.menu.add(0, 0, 0, "✔ ${originalEntry.word}（確認）")
+
+        // 後續各項：同音替換字
+        for ((index, homo) in homophones.withIndex()) {
+            val displayHomo = if (isSimplified) ChineseConverter.toSimplified(homo.word) else homo.word
+            popup.menu.add(0, index + 1, index + 1, displayHomo)
+        }
+
+        popup.setOnMenuItemClickListener { menuItem ->
+            triggerHapticFeedback()
+            val chosen: DictEntry = if (menuItem.itemId == 0) {
+                originalEntry
+            } else {
+                homophones[menuItem.itemId - 1]
+            }
+            // 選定後上屏，並記錄到個人詞庫提高優先
+            selectCandidate(chosen)
+            true
+        }
+        popup.show()
     }
 
     private fun showNextWordPredictions(word: String) {

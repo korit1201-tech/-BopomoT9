@@ -14,6 +14,10 @@ import java.io.InputStreamReader
  * - Trie 前綴樹查詢 + 個人化使用頻率加權（UserDictionary）
  * - 零韻母容錯已在 KeyMapping.getTolerantSequences() 處理
  * - 字典非同步背景極速載入，主線程 0 阻塞秒開鍵盤
+ *
+ * v1.6.5 新增：
+ * - pollConfirmedPrefix 前綴確認門檻降低（≥6鍵、剩餘≥3鍵），讓連續輸入時「今天」等詞更快自動上屏
+ * - getHomophonesFor() 同音字查詢，供候選詞長按替換功能使用
  */
 class ZhuyinT9Engine(private val context: Context) {
 
@@ -397,7 +401,7 @@ class ZhuyinT9Engine(private val context: Context) {
      */
     fun pollConfirmedPrefix(): Pair<String, Int>? {
         val cleanKeys = currentKeys.filter { it != 11 }
-        if (cleanKeys.size < 8) return null
+        if (cleanKeys.size < 6) return null
 
         val segments = findBestSentenceSegments(cleanKeys) ?: return null
         if (segments.size < 2) return null
@@ -405,10 +409,10 @@ class ZhuyinT9Engine(private val context: Context) {
         val firstSegment = segments[0] // Pair(word, keyLen)
         val remainingKeyCount = cleanKeys.size - firstSegment.second
 
-        // 判定條件：
+        // 判定條件（1.6.5 更積極提早確認前綴，防止後續按鍵干擾已確認字詞）：
         // 1. 分詞至少有 3 段 (例如: 今天 + 天氣 + 很...)
-        // 2. 或第一段詞長 >= 2 字 (例如: 今天)，且後續剩餘按鍵 >= 5 鍵 (後面至少還有一個完整字詞)
-        val shouldCommit = segments.size >= 3 || (firstSegment.first.length >= 2 && remainingKeyCount >= 5)
+        // 2. 或第一段詞長 >= 2 字 (例如: 今天)，且後續剩餘按鍵 >= 3 鍵 (後面至少還有 1 個字)
+        val shouldCommit = segments.size >= 3 || (firstSegment.first.length >= 2 && remainingKeyCount >= 3)
         if (!shouldCommit) return null
 
         val keysToRemove = firstSegment.second
@@ -455,6 +459,36 @@ class ZhuyinT9Engine(private val context: Context) {
 
     val currentCandidates: List<DictEntry>
         get() = cachedCandidates
+
+    /**
+     * 同音字查詢（長按候選詞用）：根據詞條的注音，從詞典 Trie 中取出所有相同按鍵序列的同音字/詞，
+     * 排除詞本身，依個人化使用權重排序，供使用者替換選字。
+     */
+    fun getHomophonesFor(entry: DictEntry): List<DictEntry> {
+        val zhuyin = entry.zhuyin
+        if (zhuyin.isEmpty()) return emptyList()
+
+        val keys = KeyMapping.getSequence(zhuyin, ignoreTones = false)
+        val keysNoTone = KeyMapping.getSequence(zhuyin, ignoreTones = true)
+
+        val seen = LinkedHashSet<String>()
+        val results = mutableListOf<DictEntry>()
+
+        // 查詢帶聲調序列與無聲調序列的候選詞，合併去重
+        for (seq in listOf(keys, keysNoTone).distinct()) {
+            if (seq.isEmpty()) continue
+            val node = trie.searchNode(seq) ?: continue
+            for (e in node.exactEntries) {
+                if (e.word != entry.word && e.zhuyin.isNotEmpty() && seen.add(e.word)) {
+                    results.add(e)
+                }
+            }
+        }
+
+        return results
+            .sortedByDescending { it.weight + userDict.getBoost(it.word) }
+            .take(20)
+    }
 
     fun getTopComposingWord(): String {
         val candidates = getCandidates()
