@@ -81,6 +81,7 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     private lateinit var engine: ZhuyinT9Engine
     private var candidateScroll: HorizontalScrollView? = null
+    private var candidateMoreIndicator: TextView? = null
     private lateinit var candidateContainer: LinearLayout
     private lateinit var layoutSymbols: LinearLayout
     private lateinit var scrollZhuyinCombos: ScrollView
@@ -191,6 +192,19 @@ class ZhuyinInputMethodService : InputMethodService() {
         rootView = root
         candidateScroll = root.findViewById(R.id.candidate_scroll)
         candidateContainer = root.findViewById(R.id.candidate_container)
+        candidateMoreIndicator = root.findViewById(R.id.candidate_more_indicator)
+        candidateMoreIndicator?.setOnClickListener {
+            triggerHapticFeedback()
+            candidateScroll?.smoothScrollBy(320, 0)
+        }
+        candidateScroll?.setOnScrollChangeListener { _, scrollX, _, _, _ ->
+            val maxScroll = (candidateContainer.width - (candidateScroll?.width ?: 0)).coerceAtLeast(0)
+            if (scrollX >= maxScroll - 16) {
+                candidateMoreIndicator?.visibility = View.GONE
+            } else if (candidateContainer.width > (candidateScroll?.width ?: 0)) {
+                candidateMoreIndicator?.visibility = View.VISIBLE
+            }
+        }
         layoutSymbols = root.findViewById(R.id.layout_symbols)
         scrollZhuyinCombos = root.findViewById(R.id.scroll_zhuyin_combos)
         containerZhuyinCombos = root.findViewById(R.id.container_zhuyin_combos)
@@ -949,11 +963,11 @@ class ZhuyinInputMethodService : InputMethodService() {
                     btnSpaceSwipe.text = if (isCapsLock) "大寫" else "空格"
                     updateKeyboardModeUI()
                 } else {
-                    // 中文模式下：滑動依序輪替「繁」->「簡」->「手」！
-                    chineseSubMode = when (chineseSubMode) {
-                        ChineseInputSubMode.TRADITIONAL -> ChineseInputSubMode.SIMPLIFIED
-                        ChineseInputSubMode.SIMPLIFIED -> ChineseInputSubMode.HANDWRITING
-                        ChineseInputSubMode.HANDWRITING -> ChineseInputSubMode.TRADITIONAL
+                    // 中文模式下：左滑手寫，右滑簡繁
+                    if (direction == SwipeKeyButton.Direction.LEFT) {
+                        chineseSubMode = if (chineseSubMode == ChineseInputSubMode.HANDWRITING) ChineseInputSubMode.TRADITIONAL else ChineseInputSubMode.HANDWRITING
+                    } else {
+                        chineseSubMode = if (chineseSubMode == ChineseInputSubMode.SIMPLIFIED) ChineseInputSubMode.TRADITIONAL else ChineseInputSubMode.SIMPLIFIED
                     }
 
                     if (chineseSubMode == ChineseInputSubMode.HANDWRITING) {
@@ -983,16 +997,18 @@ class ZhuyinInputMethodService : InputMethodService() {
             showQuickPunctuationPopup(btnSpaceSwipe)
         }
 
-        // 逗點與句號 (繁體全形，簡體/英文半形)
+        // 逗點與句號 (數字模式半形「,」與「:」；注音繁體全形，簡體/英文半形)
         btnComma.setOnClickListener {
             triggerHapticFeedback()
             resetT9MultiTap()
-            commitSymbol(if (isTraditionalMode()) "，" else ",")
+            val sym = if (currentMode == KeyboardMode.NUMBER_SYM) "," else if (isTraditionalMode()) "，" else ","
+            commitSymbol(sym)
         }
         btnPeriod.setOnClickListener {
             triggerHapticFeedback()
             resetT9MultiTap()
-            commitSymbol(if (isTraditionalMode()) "。" else ".")
+            val sym = if (currentMode == KeyboardMode.NUMBER_SYM) ":" else if (isTraditionalMode()) "。" else "."
+            commitSymbol(sym)
         }
     }
 
@@ -1021,20 +1037,34 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun formatSpaceChineseSubModeLabel(current: String, leftHint: String, rightHint: String): CharSequence {
-        val fullText = "$current\n‹ $leftHint · $rightHint ›"
+        // 第一行：左側提示 + 中央主字 + 右側提示；第二行：空白鍵符號
+        val line1 = "‹ $leftHint   $current   $rightHint ›"
+        val line2 = "␣ 空白"
+        val fullText = "$line1\n$line2"
         val spannable = SpannableString(fullText)
-        val split = current.length
+
         val primaryColor = ContextCompat.getColor(this, R.color.kb_text_primary)
         val secondaryColor = ContextCompat.getColor(this, R.color.kb_text_secondary)
 
-        // 第一行主狀態大字加粗
-        spannable.setSpan(RelativeSizeSpan(1.15f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        spannable.setSpan(StyleSpan(Typeface.BOLD), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        spannable.setSpan(ForegroundColorSpan(primaryColor), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val currentStart = line1.indexOf(current)
+        val currentEnd = currentStart + current.length
 
-        // 第二行滑動切換提示
-        spannable.setSpan(RelativeSizeSpan(0.60f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        spannable.setSpan(ForegroundColorSpan(secondaryColor), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        // 整體小字基礎
+        spannable.setSpan(RelativeSizeSpan(0.55f), 0, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(secondaryColor), 0, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+        // 中央主字（繁/簡/手）：大號、加粗、主色
+        if (currentStart >= 0) {
+            spannable.setSpan(RelativeSizeSpan(1.25f), currentStart, currentEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(StyleSpan(Typeface.BOLD), currentStart, currentEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(ForegroundColorSpan(primaryColor), currentStart, currentEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+
+        // 第二行 ␣ 空白：適中字號
+        val line2Start = line1.length + 1
+        spannable.setSpan(RelativeSizeSpan(0.65f), line2Start, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(secondaryColor), line2Start, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
         return spannable
     }
 
@@ -1059,7 +1089,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 btnSpaceSwipe.includeFontPadding = false
                 btnSpaceSwipe.setLineSpacing(0f, 0.9f)
                 btnSpaceSwipe.text = when (chineseSubMode) {
-                    ChineseInputSubMode.TRADITIONAL -> formatSpaceChineseSubModeLabel("繁", "簡體", "手寫")
+                    ChineseInputSubMode.TRADITIONAL -> formatSpaceChineseSubModeLabel("繁", "手寫", "簡體")
                     ChineseInputSubMode.SIMPLIFIED -> formatSpaceChineseSubModeLabel("簡", "手寫", "繁體")
                     ChineseInputSubMode.HANDWRITING -> formatSpaceChineseSubModeLabel("手", "繁體", "簡體")
                 }
@@ -1184,10 +1214,10 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     private fun updateSymbolsDisplay() {
         if (::btnComma.isInitialized) {
-            btnComma.text = if (isTraditionalMode()) "，" else ","
+            btnComma.text = if (currentMode == KeyboardMode.NUMBER_SYM) "," else if (isTraditionalMode()) "，" else ","
         }
         if (::btnPeriod.isInitialized) {
-            btnPeriod.text = if (isTraditionalMode()) "。" else "."
+            btnPeriod.text = if (currentMode == KeyboardMode.NUMBER_SYM) ":" else if (isTraditionalMode()) "。" else "."
         }
 
         if (!::btnSym1.isInitialized) return
@@ -1346,7 +1376,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             1 -> "1"; 2 -> "2"; 3 -> "3"
             4 -> "4"; 5 -> "5"; 6 -> "6"
             7 -> "7"; 8 -> "8"; 9 -> "9"
-            10 -> "."; 11 -> "0"; 12 -> "#"
+            10 -> "#"; 11 -> "0"; 12 -> "."
             else -> ""
         }
     }
@@ -1552,6 +1582,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         for (tv in candidateTextViewPool) {
             tv.visibility = View.GONE
         }
+        candidateMoreIndicator?.visibility = View.GONE
         candidateScroll?.scrollTo(0, 0)
     }
 
@@ -1600,6 +1631,10 @@ class ZhuyinInputMethodService : InputMethodService() {
             candidateTextViewPool[i].visibility = View.GONE
         }
         candidateScroll?.scrollTo(0, 0)
+        candidateScroll?.post {
+            val canScroll = candidateContainer.width > (candidateScroll?.width ?: 0)
+            candidateMoreIndicator?.visibility = if (canScroll) View.VISIBLE else View.GONE
+        }
     }
 
     private fun showNextWordPredictions(word: String) {

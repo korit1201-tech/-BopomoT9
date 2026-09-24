@@ -7,23 +7,44 @@
     android:orientation="vertical"
     android:padding="4dp">
 
-    <!-- 頂部：候選字滾動列 -->
-    <HorizontalScrollView
-        android:id="@+id/candidate_scroll"
+    <!-- 頂部：候選字滾動列與向右滾動指示器 -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="48dp"
-        android:background="@color/kb_candidate_bg"
-        android:scrollbars="none">
+        android:background="@color/kb_candidate_bg">
 
-        <LinearLayout
-            android:id="@+id/candidate_container"
-            android:layout_width="wrap_content"
+        <HorizontalScrollView
+            android:id="@+id/candidate_scroll"
+            android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp" />
-    </HorizontalScrollView>
+            android:fadingEdgeLength="24dp"
+            android:requiresFadingEdge="horizontal"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/candidate_container"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="8dp"
+                android:paddingEnd="32dp" />
+        </HorizontalScrollView>
+
+        <!-- 右側更多候選字指示器 (當候選字超過螢幕時提示使用者可向右拉動) -->
+        <TextView
+            android:id="@+id/candidate_more_indicator"
+            android:layout_width="28dp"
+            android:layout_height="match_parent"
+            android:layout_gravity="end|center_vertical"
+            android:gravity="center"
+            android:text="›"
+            android:textColor="@color/kb_candidate_text"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_candidate_more"
+            android:visibility="gone" />
+    </FrameLayout>
 
     <!-- 鍵盤高度拉伸調整把手 (拖動可上下縮放高度) -->
     <FrameLayout
