@@ -269,13 +269,19 @@ class ZhuyinT9Engine(private val context: Context) {
         )
 
         // 組合候選詞（階梯式嚴格優先級）：
-        // 1. 若有 DP 分詞預測的中文句子/長詞，直接置頂排在第一位（藍色高亮）！
-        // 2. 隨後排列完全匹配詞 (rankedExact)，最後排列前綴延伸詞 (rankedPrefix)
+        // 1. 若有字典完全匹配詞 (rankedExact)，真實高頻詞穩居第一位，絕不被拼裝詞干擾！
+        // 2. 若無完全匹配詞（純長句輸入），DP 分詞預測的完整句子置頂排在第一位（藍色高亮）！
+        // 3. 隨後依序排列前綴延伸詞 (rankedPrefix)
         val candidateList = mutableListOf<DictEntry>()
-        if (segmentedSentence != null) {
-            candidateList.add(segmentedSentence)
-            candidateList.addAll(rankedExact.filter { it.word != segmentedSentence.word })
-            candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
+        if (segmentedSentence != null && rankedExact.none { it.word == segmentedSentence.word }) {
+            if (rankedExact.isEmpty()) {
+                candidateList.add(segmentedSentence)
+                candidateList.addAll(rankedPrefix.filter { it.word != segmentedSentence.word })
+            } else {
+                candidateList.addAll(rankedExact)
+                candidateList.add(segmentedSentence)
+                candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
+            }
         } else {
             candidateList.addAll(rankedExact)
             candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
@@ -323,8 +329,8 @@ class ZhuyinT9Engine(private val context: Context) {
 
     /**
      * 動態規劃 (DP / Viterbi) 全域最佳分詞演算法
-     * 採用標準 Unigram 對數機率模型 + 成詞長度偏置 + 前綴回退保底機制，
-     * 徹底消弭「切得越碎分數越高」的數學謬誤，確保長句連續輸入流暢準確，打到一半絕不卡死空白。
+     * 採用標準 Unigram 對數機率模型 + 成詞長度偏置
+     * 僅在按鍵完全閉合成句時輸出預測長句，打到一半絕不強行拼裝怪詞。
      */
     private fun findBestSentence(keys: List<Int>): DictEntry? {
         val n = keys.size
@@ -334,7 +340,7 @@ class ZhuyinT9Engine(private val context: Context) {
         dp[0] = 0.0
         val bestSplit = arrayOfNulls<Pair<Int, DictEntry>>(n + 1)
 
-        val wordBonus = 2.5
+        val wordBonus = 3.0
         val logTotal = if (logTotalWeight > 0) logTotalWeight else 17.91
 
         for (i in 1..n) {
@@ -350,7 +356,7 @@ class ZhuyinT9Engine(private val context: Context) {
                             val effectiveWeight = entry.weight + boost
                             val logProb = Math.log(maxOf(effectiveWeight.toDouble(), 1.0)) - logTotal
                             val bonus = (entry.word.length - 1) * wordBonus
-                            val penalty = if (entry.isTolerant) -5.0 else 0.0
+                            val penalty = if (entry.isTolerant) -8.0 else 0.0
                             val score = dp[j] + logProb + bonus + penalty
                             if (score > dp[i]) {
                                 dp[i] = score
@@ -362,27 +368,15 @@ class ZhuyinT9Engine(private val context: Context) {
             }
         }
 
-        // 判定整句是否能完整打通到結尾 n
-        var targetEnd = n
+        // 僅當整句按鍵能完整打通到結尾 n 時才產生預測長句
+        // 嚴禁在未打完時拿半音拼接後綴產生怪詞
         if (dp[n] == Double.NEGATIVE_INFINITY) {
-            // 前綴回退保底：整句末尾可能尚未打完（如輸入到一半的單音），尋找最大有效切點
-            var bestJ = -1
-            for (j in (n - 1) downTo 2) {
-                if (dp[j] != Double.NEGATIVE_INFINITY) {
-                    bestJ = j
-                    break
-                }
-            }
-            if (bestJ > 0) {
-                targetEnd = bestJ
-            } else {
-                return null
-            }
+            return null
         }
 
         val words = mutableListOf<String>()
         val zhuyins = mutableListOf<String>()
-        var curr = targetEnd
+        var curr = n
         while (curr > 0) {
             val split = bestSplit[curr] ?: return null
             words.add(split.second.word)
@@ -392,22 +386,9 @@ class ZhuyinT9Engine(private val context: Context) {
         words.reverse()
         zhuyins.reverse()
 
-        // 若發生回退（targetEnd < n），抓取未完按鍵後綴的最佳候選詞或前綴進行組合呈現
-        if (targetEnd < n) {
-            val remKeys = keys.subList(targetEnd, n)
-            val remExact = trie.searchExact(remKeys).firstOrNull()
-            val remBest = remExact ?: trie.searchPrefix(remKeys, maxDepth = 2).firstOrNull()
-            if (remBest != null) {
-                words.add(remBest.word)
-                zhuyins.add(remBest.zhuyin)
-            }
-        }
-
-        if (words.isNotEmpty()) {
-            val combinedWord = words.joinToString("")
-            if (combinedWord.length >= 2) {
-                return DictEntry(combinedWord, zhuyins.joinToString(""), 100_000_000)
-            }
+        // 必須由 2 個或以上的詞彙拼合而成，才視為長句預測
+        if (words.size > 1) {
+            return DictEntry(words.joinToString(""), zhuyins.joinToString(""), 100_000_000)
         }
         return null
     }
