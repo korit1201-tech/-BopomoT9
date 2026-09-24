@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
@@ -183,6 +184,9 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     override fun onCreateInputView(): View {
+        candidateTextViewPool.clear()
+        comboButtonPool.clear()
+
         val root = layoutInflater.inflate(R.layout.keyboard_view, null)
         rootView = root
         candidateScroll = root.findViewById(R.id.candidate_scroll)
@@ -262,7 +266,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         root.findViewById<Button>(R.id.btn_handwriting_clear)?.setOnClickListener {
             triggerHapticFeedback()
             handwritingCanvas.clearCanvas()
-            candidateContainer.removeAllViews()
+            clearCandidateBar()
         }
 
         btnMode123 = root.findViewById(R.id.btn_mode_123)
@@ -1430,7 +1434,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             }
             // 退格後清除接續預測（因為前一個詞可能已被修改）
             lastCommittedWord = null
-            candidateContainer.removeAllViews()
+            clearCandidateBar()
         }
     }
 
@@ -1496,7 +1500,12 @@ class ZhuyinInputMethodService : InputMethodService() {
         for (i in 0 until count) {
             val combo = combos[i]
             val btn = if (i < comboButtonPool.size) {
-                comboButtonPool[i]
+                val existing = comboButtonPool[i]
+                if (existing.parent != containerZhuyinCombos) {
+                    (existing.parent as? ViewGroup)?.removeView(existing)
+                    containerZhuyinCombos.addView(existing)
+                }
+                existing
             } else {
                 Button(this).apply {
                     textSize = 15f
@@ -1530,6 +1539,13 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
     }
 
+    private fun clearCandidateBar() {
+        for (tv in candidateTextViewPool) {
+            tv.visibility = View.GONE
+        }
+        candidateScroll?.scrollTo(0, 0)
+    }
+
     private fun updateCandidateBar(candidates: List<DictEntry>) {
         val displayCandidates = candidates.take(MAX_CANDIDATES_DISPLAY)
         val count = displayCandidates.size
@@ -1539,7 +1555,12 @@ class ZhuyinInputMethodService : InputMethodService() {
             val displayWord = if (isSimplified) ChineseConverter.toSimplified(entry.word) else entry.word
 
             val tv = if (i < candidateTextViewPool.size) {
-                candidateTextViewPool[i]
+                val existing = candidateTextViewPool[i]
+                if (existing.parent != candidateContainer) {
+                    (existing.parent as? ViewGroup)?.removeView(existing)
+                    candidateContainer.addView(existing)
+                }
+                existing
             } else {
                 TextView(this).apply {
                     textSize = 20f
@@ -1574,9 +1595,7 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     private fun showNextWordPredictions(word: String) {
         if (word.isEmpty()) {
-            for (tv in candidateTextViewPool) {
-                tv.visibility = View.GONE
-            }
+            clearCandidateBar()
             return
         }
 
@@ -1584,11 +1603,8 @@ class ZhuyinInputMethodService : InputMethodService() {
         if (predictions.isNotEmpty()) {
             updateCandidateBar(predictions)
         } else {
-            for (tv in candidateTextViewPool) {
-                tv.visibility = View.GONE
-            }
+            clearCandidateBar()
         }
-        candidateScroll?.scrollTo(0, 0)
     }
 
     private fun selectCandidate(entry: DictEntry) {
@@ -1696,16 +1712,17 @@ class ZhuyinInputMethodService : InputMethodService() {
             // E. 大千注音按鍵映射輸入
             val zhuyinChar = DAQIAN_KEY_MAP[keyCode]
             if (zhuyinChar != null) {
-                val keyId = com.bopomofo.t9ime.engine.KeyMapping.getKeyId(zhuyinChar)
-                if (keyId != null) {
-                    val candidates = if (keyId == 11) {
-                        val (_, cands) = engine.cycleTone()
-                        cands
-                    } else {
-                        engine.pressKey(keyId)
-                    }
-                    refreshUI(candidates)
+                if (zhuyinChar in listOf('ˇ', 'ˋ', 'ˊ', '˙')) {
+                    val (_, cands) = engine.setTone(zhuyinChar)
+                    refreshUI(cands)
                     return true
+                } else {
+                    val keyId = com.bopomofo.t9ime.engine.KeyMapping.getKeyId(zhuyinChar)
+                    if (keyId != null) {
+                        val candidates = engine.pressKey(keyId)
+                        refreshUI(candidates)
+                        return true
+                    }
                 }
             }
         }
@@ -1734,7 +1751,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         engine.clear()
         lastCommittedWord = null
         resetT9MultiTap()
-        candidateContainer.removeAllViews()
+        clearCandidateBar()
         currentInputConnection?.finishComposingText()
     }
 }

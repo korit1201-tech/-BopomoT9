@@ -179,6 +179,30 @@ class ZhuyinT9Engine(private val context: Context) {
         return Pair(TONE_SYMBOLS[currentToneIndex], cachedCandidates)
     }
 
+    /**
+     * 直接設置指定聲調（如大千實體鍵盤 3, 4, 6, 7 聲調鍵精確輸入）
+     * 若再次輸入同一個聲調則取消聲調 (Toggle 回無聲調)
+     */
+    fun setTone(toneChar: Char): Pair<Char, List<DictEntry>> {
+        if (currentKeys.isEmpty()) return Pair(' ', emptyList())
+
+        val targetIndex = TONE_SYMBOLS.indexOf(toneChar)
+        if (targetIndex <= 0) return Pair(' ', cachedCandidates)
+
+        currentToneIndex = if (currentToneIndex == targetIndex) 0 else targetIndex
+
+        if (currentKeys.isNotEmpty() && currentKeys.last() == 11) {
+            currentKeys.removeAt(currentKeys.size - 1)
+        }
+        if (currentToneIndex > 0) {
+            currentKeys.add(11)
+        }
+
+        lockedZhuyinCombo = null
+        recalculate()
+        return Pair(TONE_SYMBOLS[currentToneIndex], cachedCandidates)
+    }
+
     fun backspace(): List<DictEntry> {
         if (currentKeys.isNotEmpty()) {
             currentKeys.removeAt(currentKeys.size - 1)
@@ -257,33 +281,36 @@ class ZhuyinT9Engine(private val context: Context) {
             candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
         }
 
-        // 產生左側合法注音音節列表（基於教育部 429 個合法音節與實際按鍵，徹底告別暴力截斷與殘缺拼音）
+        // 產生左側注音音節/詞彙組合列表（兼顧單字合法音節與多字詞組合，杜絕組合遺失與無字可選）
         val cleanKeys = currentKeys.filter { it != 11 }
-        val exactSyllables = SyllableManager.getExactSyllables(cleanKeys)
-        val rawCombos = if (exactSyllables.isNotEmpty()) {
-            exactSyllables
-        } else {
-            val prefixSyls = SyllableManager.getPrefixSyllables(cleanKeys, maxCount = 8)
-            if (prefixSyls.isNotEmpty()) {
-                prefixSyls
-            } else {
-                // 若鍵數較長（連續長句），取最後 1~2 鍵推導當前正在輸入的音節
-                val tailKeys = if (cleanKeys.size >= 2) cleanKeys.takeLast(2) else cleanKeys
-                val tailExact = SyllableManager.getExactSyllables(tailKeys)
-                if (tailExact.isNotEmpty()) tailExact else emptyList()
+        val phonemeKeyLen = cleanKeys.size
+        val comboSet = LinkedHashSet<String>()
+
+        // 1. 從候選字詞列表提取所有可能的前綴注音走向（涵蓋單字 ㄐㄧㄢ 與多字詞 ㄐㄧㄓ、ㄍㄣㄓ、ㄍㄣㄗ 等）
+        for (entry in candidateList) {
+            val clean = entry.zhuyin.filter { it !in "ˇˋˊ˙" }
+            val prefix = if (clean.length >= phonemeKeyLen) clean.substring(0, phonemeKeyLen) else clean
+            if (prefix.isNotEmpty()) {
+                val label = if (toneChar != null) "$prefix$toneChar" else prefix
+                comboSet.add(label)
+            }
+            if (comboSet.size >= 8) break
+        }
+
+        // 2. 對於短按鍵 (<= 3 鍵)，補充標準音節管理器中的合法單音節
+        if (phonemeKeyLen <= 3) {
+            val exactSyllables = SyllableManager.getExactSyllables(cleanKeys)
+            for (syl in exactSyllables) {
+                val label = if (toneChar != null) "$syl$toneChar" else syl
+                comboSet.add(label)
+                if (comboSet.size >= 8) break
             }
         }
 
-        val comboSet = LinkedHashSet<String>()
-        for (syl in rawCombos) {
-            val label = if (toneChar != null) "$syl$toneChar" else syl
-            comboSet.add(label)
-        }
-
+        // 3. 保底：若依然為空，以各按鍵第一注音符號合成
         if (comboSet.isEmpty()) {
             val sb = StringBuilder()
-            for (k in currentKeys) {
-                if (k == 11) continue
+            for (k in cleanKeys) {
                 val chs = KeyMapping.getChars(k)
                 if (chs.isNotEmpty()) sb.append(chs[0])
             }
