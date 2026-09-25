@@ -102,6 +102,34 @@ object SyllableManager {
         return results.distinct().sortedByDescending { getSyllableWeight(it) }.take(maxCount)
     }
 
+    val VALID_SYLLABLES_SET: Set<String> by lazy { VALID_SYLLABLES.toHashSet() }
+
+    /**
+     * 依據教育部標準 429 個合法音節，將詞彙的無聲調注音字串切分為指定字數的合法音節
+     * 例："ㄊㄞㄨㄢ", 2 -> ["ㄊㄞ", "ㄨㄢ"]
+     */
+    fun splitIntoSyllables(cleanZhuyin: String, wordLength: Int): List<String>? {
+        val len = cleanZhuyin.length
+        fun backtrack(idx: Int, count: Int): MutableList<String>? {
+            if (idx == len && count == wordLength) return ArrayList(wordLength)
+            if (idx >= len || count >= wordLength) return null
+            for (subLen in 3 downTo 1) {
+                if (idx + subLen <= len) {
+                    val sub = cleanZhuyin.substring(idx, idx + subLen)
+                    if (VALID_SYLLABLES_SET.contains(sub)) {
+                        val rem = backtrack(idx + subLen, count + 1)
+                        if (rem != null) {
+                            rem.add(0, sub)
+                            return rem
+                        }
+                    }
+                }
+            }
+            return null
+        }
+        return backtrack(0, 0)
+    }
+
     /**
      * 檢查注音字串是否為合法音節（無聲調）
      */

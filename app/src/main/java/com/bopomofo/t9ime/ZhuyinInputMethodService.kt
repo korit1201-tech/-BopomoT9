@@ -740,15 +740,20 @@ class ZhuyinInputMethodService : InputMethodService() {
         for ((ch, num) in r1) {
             row1.addView(createZhuyinFullKey(ch, 1f, num))
         }
+        row1.addView(createZhuyinFullDelKey(1.1f))
+
         for (ch in r2) {
             row2.addView(createZhuyinFullKey(ch, 1f))
         }
         for (ch in r3) {
             row3.addView(createZhuyinFullKey(ch, 1f))
         }
+
+        row4.addView(createZhuyinFullClearKey(1.1f))
         for (ch in r4) {
             row4.addView(createZhuyinFullKey(ch, 1f))
         }
+        row4.addView(createZhuyinFullDelKey(1.1f))
     }
 
     private fun createZhuyinFullKey(ch: Char, weight: Float, longClickChar: String? = null): Button {
@@ -775,7 +780,56 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
     }
 
-    private val ZHUYIN_INITIALS_STR = "ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙ"
+    private fun createZhuyinFullDelKey(weight: Float): Button {
+        return Button(this).apply {
+            text = "⌫"
+            textSize = 17f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
+                setMargins(1, 2, 1, 2)
+            }
+            layoutParams = params
+            setOnTouchListener { v, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        v.isPressed = true
+                        triggerHapticFeedback()
+                        performBackspace()
+                        isRepeatingBackspace = true
+                        repeatHandler.postDelayed(backspaceRunnable, INITIAL_REPEAT_DELAY)
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        v.isPressed = false
+                        isRepeatingBackspace = false
+                        repeatHandler.removeCallbacks(backspaceRunnable)
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+    }
+
+    private fun createZhuyinFullClearKey(weight: Float): Button {
+        return Button(this).apply {
+            text = "清空"
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
+                setMargins(1, 2, 1, 2)
+            }
+            layoutParams = params
+            setOnClickListener {
+                triggerHapticFeedback()
+                fullZhuyinBuffer.clear()
+                currentInputConnection?.finishComposingText()
+                clearCandidateBar()
+            }
+        }
+    }
 
     private fun handleZhuyinFullKey(ch: Char) {
         lastCommittedWord = null
@@ -786,46 +840,12 @@ class ZhuyinInputMethodService : InputMethodService() {
             homophoneCharIndex = -1
         }
 
-        // 聲調處理
-        if (ch in listOf('ˇ', 'ˋ', 'ˊ', '˙')) {
-            if (fullZhuyinBuffer.isNotEmpty()) {
-                fullZhuyinBuffer.append(ch)
-                val (_, candidates) = engine.setTone(ch)
-                updateComposingPreviewFull()
-                refreshUI(candidates)
-            } else {
-                commitTextDirectly(ch.toString())
-            }
-            return
-        }
-
         fullZhuyinBuffer.append(ch)
-        val bufStr = fullZhuyinBuffer.toString()
         updateComposingPreviewFull()
 
-        // 簡拼（偷懶輸入）偵測：
-        // 1. 全部為聲母或零聲母首符號且長度 >= 2 (如 ㄐㄊ, ㄋㄏ, ㄨㄇ, ㄊㄨ)
-        // 2. 或含有連續兩個聲母 (如 ㄐㄧㄣㄊ)
-        val isAllInitials = bufStr.length >= 2 && bufStr.all { it in ZHUYIN_INITIALS_STR || it in "ㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦ" }
-        val hasConsecutiveInitials = bufStr.length >= 2 && (0 until bufStr.length - 1).any {
-            bufStr[it] in ZHUYIN_INITIALS_STR && bufStr[it + 1] in ZHUYIN_INITIALS_STR
-        }
-
-        if (hasConsecutiveInitials || isAllInitials) {
-            val initialResults = engine.searchInitials(bufStr)
-            if (initialResults.isNotEmpty()) {
-                refreshUI(initialResults)
-                return
-            }
-        }
-
-        // 一般注音組字：轉成 9 鍵序列查詢字典
-        val keyId = com.bopomofo.t9ime.engine.KeyMapping.getKeyId(ch)
-        if (keyId != null) {
-            engine.pressKey(keyId)
-            checkAndCommitConfirmedPrefix()
-            refreshUI(engine.getCandidates())
-        }
+        // 呼叫注音全鍵盤專屬預測與候選檢索引擎（支援聲母簡拼、混合簡打與全拼聯想）
+        val candidates = engine.searchFullZhuyin(fullZhuyinBuffer.toString())
+        refreshUI(candidates)
     }
 
     private fun updateComposingPreviewFull() {
@@ -1206,7 +1226,7 @@ class ZhuyinInputMethodService : InputMethodService() {
      */
     private fun performEnterAction() {
         if (currentMode == KeyboardMode.ZHUYIN_FULL && fullZhuyinBuffer.isNotEmpty()) {
-            val candidates = engine.getCandidates()
+            val candidates = engine.searchFullZhuyin(fullZhuyinBuffer.toString())
             val word = candidates.firstOrNull()?.word ?: fullZhuyinBuffer.toString()
             commitProcessedWordWithUserDict(word)
             return
@@ -1351,7 +1371,11 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         btnSpaceSwipe.onTapListener = {
             triggerHapticFeedback()
-            if (engine.hasComposing() || fullZhuyinBuffer.isNotEmpty()) {
+            if (currentMode == KeyboardMode.ZHUYIN_FULL && fullZhuyinBuffer.isNotEmpty()) {
+                val candidates = engine.searchFullZhuyin(fullZhuyinBuffer.toString())
+                val topWord = candidates.firstOrNull()?.word ?: fullZhuyinBuffer.toString()
+                commitProcessedWordWithUserDict(topWord)
+            } else if (engine.hasComposing()) {
                 val topWord = customComposingWord ?: engine.getCandidates().firstOrNull()?.word ?: engine.getTopComposingWord()
                 commitProcessedWordWithUserDict(topWord)
             } else {
@@ -1813,29 +1837,12 @@ class ZhuyinInputMethodService : InputMethodService() {
         if (currentMode == KeyboardMode.ZHUYIN_FULL && fullZhuyinBuffer.isNotEmpty()) {
             fullZhuyinBuffer.deleteCharAt(fullZhuyinBuffer.length - 1)
             if (fullZhuyinBuffer.isEmpty()) {
-                engine.clear()
                 currentInputConnection?.finishComposingText()
-                refreshUI(emptyList())
+                clearCandidateBar()
             } else {
                 updateComposingPreviewFull()
-                val bufStr = fullZhuyinBuffer.toString()
-                val isAllInitials = bufStr.length >= 2 && bufStr.all { it in ZHUYIN_INITIALS_STR || it in "ㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦ" }
-                val hasConsecutiveInitials = bufStr.length >= 2 && (0 until bufStr.length - 1).any {
-                    bufStr[it] in ZHUYIN_INITIALS_STR && bufStr[it + 1] in ZHUYIN_INITIALS_STR
-                }
-                if (hasConsecutiveInitials || isAllInitials) {
-                    val initialResults = engine.searchInitials(bufStr)
-                    if (initialResults.isNotEmpty()) {
-                        refreshUI(initialResults)
-                        return
-                    }
-                }
-                if (engine.hasComposing()) {
-                    val candidates = engine.backspace()
-                    refreshUI(candidates)
-                } else {
-                    refreshUI(emptyList())
-                }
+                val candidates = engine.searchFullZhuyin(fullZhuyinBuffer.toString())
+                refreshUI(candidates)
             }
             return
         }

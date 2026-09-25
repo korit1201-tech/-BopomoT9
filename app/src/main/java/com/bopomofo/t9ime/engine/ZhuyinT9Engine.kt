@@ -133,13 +133,16 @@ class ZhuyinT9Engine(private val context: Context) {
                         targetTrie.insert(entry)
                         accumulatedWeight += weight
 
-                        // 構建簡拼（聲母偷懶輸入）索引表 (2~5字詞)
-                        val syllables = zhuyin.split(" ")
-                        if (syllables.size in 2..5) {
-                            val initials = syllables.mapNotNull { it.firstOrNull() }.joinToString("")
-                            if (initials.isNotEmpty()) {
-                                val list = targetInitialMap.getOrPut(initials) { ArrayList(4) }
-                                list.add(entry)
+                        // 構建簡拼（聲母偷懶輸入）索引表 (2~6字詞)
+                        val cleanZhuyin = zhuyin.filter { it !in "ˇˋˊ˙" }
+                        if (word.length in 2..6) {
+                            val syllables = SyllableManager.splitIntoSyllables(cleanZhuyin, word.length)
+                            if (syllables != null && syllables.size == word.length) {
+                                val initials = syllables.map { it[0] }.joinToString("")
+                                if (initials.isNotEmpty()) {
+                                    val list = targetInitialMap.getOrPut(initials) { ArrayList(4) }
+                                    list.add(entry)
+                                }
                             }
                         }
 
@@ -182,6 +185,9 @@ class ZhuyinT9Engine(private val context: Context) {
             logTotalWeight = Math.log(maxOf(accumulatedWeight.toDouble(), 1.0))
 
             for ((_, list) in targetNextWordMap) {
+                list.sortByDescending { it.weight }
+            }
+            for ((_, list) in targetInitialMap) {
                 list.sortByDescending { it.weight }
             }
         } catch (e: Exception) {
@@ -520,8 +526,9 @@ class ZhuyinT9Engine(private val context: Context) {
                     list.add(0, zy)
                 }
             }
-            val syllables = zy.split(" ")
-            if (syllables.size in 2..5) {
+            val cleanZy = zy.filter { it !in "ˇˋˊ˙" }
+            val syllables = if (zy.contains(" ")) zy.split(" ") else SyllableManager.splitIntoSyllables(cleanZy, word.length)
+            if (syllables != null && syllables.size == word.length) {
                 val initials = syllables.mapNotNull { it.firstOrNull() }.joinToString("")
                 if (initials.isNotEmpty()) {
                     val list = initialMap.getOrPut(initials) { ArrayList(4) }
@@ -530,6 +537,98 @@ class ZhuyinT9Engine(private val context: Context) {
                 }
             }
         }
+    }
+
+    /**
+     * 41 鍵大千注音全鍵盤專屬預測與候選檢索引擎（支援聲母簡拼、混合簡打與全拼聯想）
+     */
+    fun searchFullZhuyin(inputZhuyin: String): List<DictEntry> {
+        if (inputZhuyin.isEmpty()) return emptyList()
+
+        val cleanInput = inputZhuyin.filter { it !in "ˇˋˊ˙" }
+        val results = mutableListOf<DictEntry>()
+        val seenWords = hashSetOf<String>()
+
+        // 1. 個人詞庫 (UserDict) 最高優先權
+        val userEntries = userDict.getAllEntries()
+        for (u in userEntries) {
+            val uClean = u.zhuyin.filter { it !in "ˇˋˊ˙" }
+            if (uClean.startsWith(cleanInput) || u.word.startsWith(cleanInput)) {
+                if (seenWords.add(u.word)) {
+                    results.add(DictEntry(u.word, u.zhuyin, 50_000_000 + u.count * 1_000_000))
+                }
+            }
+        }
+
+        // 2. 首碼簡拼精確匹配 (Pure Initials Match, 如 ㄐㄊ -> 今天, 家庭)
+        if (cleanInput.length >= 2) {
+            val matched = initialMap[cleanInput]
+            if (matched != null) {
+                for (e in matched) {
+                    if (seenWords.add(e.word)) {
+                        results.add(e)
+                        if (results.size >= 30) break
+                    }
+                }
+            }
+        }
+
+        // 3. 混合簡打匹配 (Hybrid Match, 如 ㄐㄧㄣㄊ -> 今天: 前綴音節 ㄐㄧㄣ + 後續首碼 ㄊ)
+        if (cleanInput.length >= 3) {
+            for (splitIdx in minOf(cleanInput.length - 1, 3) downTo 1) {
+                val firstSyl = cleanInput.substring(0, splitIdx)
+                val restInitials = cleanInput.substring(splitIdx)
+                if (SyllableManager.isValidSyllable(firstSyl)) {
+                    val targetInitials = firstSyl[0] + restInitials
+                    val matched = initialMap[targetInitials]
+                    if (matched != null) {
+                        for (e in matched) {
+                            val eClean = e.zhuyin.filter { it !in "ˇˋˊ˙" }
+                            if (eClean.startsWith(firstSyl) && seenWords.add(e.word)) {
+                                results.add(e)
+                                if (results.size >= 40) break
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. 全拼前綴檢索 (Trie Prefix Match, 如 ㄐㄧㄣ -> 今, 金, 今天, 金融)
+        val keys = cleanInput.mapNotNull { KeyMapping.getKeyId(it) }
+        if (keys.isNotEmpty()) {
+            val trieResults = trie.searchPrefix(keys)
+            for (e in trieResults) {
+                val eClean = e.zhuyin.filter { it !in "ˇˋˊ˙" }
+                if (eClean.startsWith(cleanInput) && seenWords.add(e.word)) {
+                    results.add(e)
+                    if (results.size >= 50) break
+                }
+            }
+        }
+
+        // 5. 單字精確與聲母檢索 (若輸入為單字音節或聲母)
+        val singleMatches = mutableListOf<DictEntry>()
+        for ((ch, zhuyinList) in charZhuyinMap) {
+            for (z in zhuyinList) {
+                val zClean = z.filter { it !in "ˇˋˊ˙" }
+                if (zClean == cleanInput || (cleanInput.length == 1 && zClean.startsWith(cleanInput))) {
+                    val w = ch.toString()
+                    if (!seenWords.contains(w)) {
+                        singleMatches.add(DictEntry(w, z, 500))
+                    }
+                }
+            }
+        }
+        singleMatches.sortByDescending { it.weight }
+        for (e in singleMatches) {
+            if (seenWords.add(e.word)) {
+                results.add(e)
+                if (results.size >= 60) break
+            }
+        }
+
+        return results
     }
 
     /**
