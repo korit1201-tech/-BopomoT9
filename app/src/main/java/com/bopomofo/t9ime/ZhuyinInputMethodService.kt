@@ -52,32 +52,31 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     enum class KeyboardMode {
-        ZHUYIN,         // 12 鍵注音
+        ZHUYIN,         // 12 鍵注音 (9 鍵)
+        ZHUYIN_FULL,    // 41 鍵大千全注音
         NUMBER_SYM,     // 12 鍵數字/符號
-        ENGLISH_T9,     // 12 鍵英文 (T9 9-Key Multi-tap)
         ENGLISH_QWERTY, // 26 鍵英文全鍵盤
         HANDWRITING     // 手寫輸入
     }
 
-    enum class ChineseInputSubMode {
-        TRADITIONAL,    // 繁體
-        SIMPLIFIED,     // 簡體
-        HANDWRITING     // 手寫
+    enum class EnglishCaseState {
+        LOWER,          // 全小寫 (abc)
+        FIRST_UPPER,    // 首字母大寫 (Abc)
+        ALL_UPPER       // 全大寫鎖定 (ABC)
+    }
+
+    enum class SymbolTab {
+        FULLWIDTH, HALFWIDTH, DPAD, MATH
     }
 
     private var currentMode = KeyboardMode.ZHUYIN
-    private var chineseSubMode = ChineseInputSubMode.TRADITIONAL
-    private val isSimplified: Boolean
-        get() = chineseSubMode == ChineseInputSubMode.SIMPLIFIED
-
-    private var isCapsLock = false   // 大小寫切換狀態
+    private var isSimplified = false
+    private var englishCaseState = EnglishCaseState.LOWER
+    private val isCapsLock: Boolean
+        get() = englishCaseState != EnglishCaseState.LOWER
+    private var currentSymbolTab = SymbolTab.DPAD
     private var lastCommittedWord: String? = null
-
-    // Multi-tap 狀態追蹤 (9 鍵英文連按輪替：A -> B -> C)
-    private var lastT9Key = -1
-    private var lastT9CharIndex = 0
-    private var lastT9Time = 0L
-    private val MULTI_TAP_TIMEOUT = 1000L // 1 秒內連按同一鍵切換字母
+    private val fullZhuyinBuffer = StringBuilder()
 
     private lateinit var engine: ZhuyinT9Engine
     private var candidateScroll: HorizontalScrollView? = null
@@ -100,6 +99,8 @@ class ZhuyinInputMethodService : InputMethodService() {
     private lateinit var layout12Key: LinearLayout
     private lateinit var layoutQwerty: LinearLayout
     private lateinit var layoutHandwriting: FrameLayout
+    private lateinit var layoutZhuyinFull: LinearLayout
+    private lateinit var layoutSymbolPanel: LinearLayout
     private lateinit var layoutMainFrame: FrameLayout
     private lateinit var layoutResizeHandle: FrameLayout
     private lateinit var handwritingCanvas: com.bopomofo.t9ime.ui.HandwritingCanvasView
@@ -111,7 +112,9 @@ class ZhuyinInputMethodService : InputMethodService() {
     private lateinit var btnMode123: Button
     private lateinit var btnLangToggle: Button
     private lateinit var btnSpaceSwipe: SwipeKeyButton
-    private lateinit var btnQwertyToggle: Button
+    private lateinit var btnQwertyToggle: SwipeKeyButton
+    private lateinit var btnSymbolDrawer: Button
+    private lateinit var containerSymbolContent: FrameLayout
 
     private val repeatHandler = Handler(Looper.getMainLooper())
     private var isRepeatingBackspace = false
@@ -295,9 +298,15 @@ class ZhuyinInputMethodService : InputMethodService() {
         btnLangToggle = root.findViewById(R.id.btn_lang_toggle)
         btnSpaceSwipe = root.findViewById(R.id.btn_space_swipe)
         btnQwertyToggle = root.findViewById(R.id.btn_qwerty_toggle)
+        layoutZhuyinFull = root.findViewById(R.id.layout_zhuyin_full)
+        layoutSymbolPanel = root.findViewById(R.id.layout_symbol_panel)
+        btnSymbolDrawer = root.findViewById(R.id.btn_symbol_drawer)
+        containerSymbolContent = root.findViewById(R.id.container_symbol_content)
 
         setup12KeyLayout(root)
+        setupZhuyinFullLayout(root)
         setupQwertyLayout(root)
+        setupSymbolPanel(root)
         setupSideActions(root)
         setupBottomActions(root)
 
@@ -339,9 +348,6 @@ class ZhuyinInputMethodService : InputMethodService() {
                     KeyboardMode.NUMBER_SYM -> {
                         commitTextDirectly(getNumberChar(keyNum))
                     }
-                    KeyboardMode.ENGLISH_T9 -> {
-                        handleT9EnglishTap(keyNum)
-                    }
                     else -> {}
                 }
             }
@@ -355,14 +361,6 @@ class ZhuyinInputMethodService : InputMethodService() {
                     }
                     KeyboardMode.NUMBER_SYM -> {
                         // 純數字模式不提供英文滑動輸入
-                    }
-                    KeyboardMode.ENGLISH_T9 -> {
-                        val letter = getT9EnglishSwipe(keyNum, direction)
-                        if (letter != null) {
-                            val finalChar = if (isCapsLock) letter.uppercaseChar() else letter
-                            commitTextDirectly(finalChar.toString())
-                            resetT9MultiTap()
-                        }
                     }
                     else -> {}
                 }
@@ -380,15 +378,6 @@ class ZhuyinInputMethodService : InputMethodService() {
                     }
                     KeyboardMode.NUMBER_SYM -> {
                         // 純數字模式不顯示十字滑動字母指示盤
-                    }
-                    KeyboardMode.ENGLISH_T9 -> {
-                        for (dir in SwipeKeyButton.Direction.values()) {
-                            val ch = getT9EnglishSwipe(keyNum, dir)
-                            if (ch != null) {
-                                val finalCh = if (isCapsLock) ch.uppercaseChar() else ch
-                                map[dir] = finalCh.toString()
-                            }
-                        }
                     }
                     else -> {}
                 }
@@ -484,39 +473,10 @@ class ZhuyinInputMethodService : InputMethodService() {
         popup.show()
     }
 
-    /**
-     * 9 鍵英文 Multi-tap 處理（連按同一鍵循環切換：A -> B -> C -> 2）
-     */
-    private fun handleT9EnglishTap(keyNum: Int) {
-        val charList = getT9CharsForKey(keyNum)
-        if (charList.isEmpty()) return
-
-        val now = System.currentTimeMillis()
-        if (keyNum == lastT9Key && (now - lastT9Time) < MULTI_TAP_TIMEOUT) {
-            // 同一按鍵在 1 秒內連按：先刪除前一個字元，再輸出下一個字母！
-            currentInputConnection?.deleteSurroundingText(1, 0)
-            lastT9CharIndex = (lastT9CharIndex + 1) % charList.size
-        } else {
-            // 新按鍵或超時：輸出第一個字母
-            lastT9Key = keyNum
-            lastT9CharIndex = 0
-        }
-        lastT9Time = now
-
-        val targetChar = charList[lastT9CharIndex]
-        val finalChar = if (isCapsLock) targetChar.uppercaseChar() else targetChar
-        currentInputConnection?.commitText(finalChar.toString(), 1)
-    }
-
-    private fun resetT9MultiTap() {
-        lastT9Key = -1
-        lastT9CharIndex = 0
-        lastT9Time = 0L
-    }
+    private fun resetT9MultiTap() {}
 
     /**
-     * 數字/英文混合模式字符表（數字優先，連按同鍵切英文字母）
-     * 參考 libchewing 的 9 鍵英文設計，第一個位置永遠是數字
+     * 數字/英文混合模式字符表
      */
     private fun getCombinedNumberEnglishChars(keyNum: Int): List<String> {
         return when (keyNum) {
@@ -534,31 +494,6 @@ class ZhuyinInputMethodService : InputMethodService() {
             12 -> listOf("#", "%", "&", "!")
             else -> emptyList()
         }
-    }
-
-    /**
-     * 數字/英文混合按鍵處理：
-     * - 第一次按下 → 輸出數字（直接上屏）
-     * - 1 秒內再按同一鍵 → 刪除前一字元，輸出下一個英文字母（依序循環）
-     */
-    private fun handleCombinedNumberEnglishTap(keyNum: Int) {
-        val charList = getCombinedNumberEnglishChars(keyNum)
-        if (charList.isEmpty()) return
-
-        val now = System.currentTimeMillis()
-        if (keyNum == lastT9Key && (now - lastT9Time) < MULTI_TAP_TIMEOUT) {
-            currentInputConnection?.deleteSurroundingText(1, 0)
-            lastT9CharIndex = (lastT9CharIndex + 1) % charList.size
-        } else {
-            lastT9Key = keyNum
-            lastT9CharIndex = 0
-        }
-        lastT9Time = now
-
-        val selected = charList[lastT9CharIndex]
-        val finalStr = if (isCapsLock && selected.length == 1 && selected[0].isLetter())
-            selected.uppercase() else selected
-        currentInputConnection?.commitText(finalStr, 1)
     }
 
     private fun getT9CharsForKey(keyNum: Int): List<Char> {
@@ -613,7 +548,11 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         // 1. Shift 大小寫切換鍵 (左側)
         val btnShift = Button(this).apply {
-            text = if (isCapsLock) "⇪" else "⇧"
+            text = when (englishCaseState) {
+                EnglishCaseState.LOWER -> "⇧"
+                EnglishCaseState.FIRST_UPPER -> "⇧•"
+                EnglishCaseState.ALL_UPPER -> "⇪"
+            }
             textSize = 18f
             setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
             setBackgroundResource(R.drawable.bg_key_action)
@@ -623,8 +562,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             layoutParams = params
             setOnClickListener {
                 triggerHapticFeedback()
-                isCapsLock = !isCapsLock
-                updateQwertyKeysText()
+                cycleEnglishCase()
             }
         }
         row3?.addView(btnShift)
@@ -745,6 +683,11 @@ class ZhuyinInputMethodService : InputMethodService() {
                 triggerHapticFeedback()
                 val letterToCommit = if (isCapsLock) text.uppercase() else text.lowercase()
                 commitTextDirectly(letterToCommit)
+                if (englishCaseState == EnglishCaseState.FIRST_UPPER) {
+                    englishCaseState = EnglishCaseState.LOWER
+                    updateQwertyKeysText()
+                    updateKeyboardModeUI()
+                }
             }
             if (longClickChar != null) {
                 setOnLongClickListener {
@@ -759,6 +702,431 @@ class ZhuyinInputMethodService : InputMethodService() {
     private fun updateQwertyKeysText() {
         val root = layoutQwerty
         setupQwertyLayout(root)
+    }
+
+    private fun cycleEnglishCase() {
+        englishCaseState = when (englishCaseState) {
+            EnglishCaseState.LOWER -> EnglishCaseState.FIRST_UPPER
+            EnglishCaseState.FIRST_UPPER -> EnglishCaseState.ALL_UPPER
+            EnglishCaseState.ALL_UPPER -> EnglishCaseState.LOWER
+        }
+        updateQwertyKeysText()
+        updateKeyboardModeUI()
+    }
+
+    /**
+     * 41 鍵大千注音全鍵盤配置：
+     * Row 1: ㄅ ㄉ ˇ ˋ ㄓ ˊ ˙ ㄚ ㄞ ㄢ (長按輸出數字 1~0)
+     * Row 2: ㄆ ㄊ ㄍ ㄐ ㄔ ㄗ ㄧ ㄛ ㄟ ㄣ
+     * Row 3: ㄇ ㄋ ㄎ ㄑ ㄕ ㄘ ㄨ ㄜ ㄠ ㄤ
+     * Row 4: ㄈ ㄌ ㄏ ㄒ ㄖ ㄙ ㄩ ㄝ ㄡ ㄥ ㄦ
+     */
+    private fun setupZhuyinFullLayout(root: View) {
+        val row1 = root.findViewById<LinearLayout>(R.id.zhuyin_full_row_1) ?: return
+        val row2 = root.findViewById<LinearLayout>(R.id.zhuyin_full_row_2) ?: return
+        val row3 = root.findViewById<LinearLayout>(R.id.zhuyin_full_row_3) ?: return
+        val row4 = root.findViewById<LinearLayout>(R.id.zhuyin_full_row_4) ?: return
+
+        row1.removeAllViews()
+        row2.removeAllViews()
+        row3.removeAllViews()
+        row4.removeAllViews()
+
+        val r1 = listOf('ㄅ' to "1", 'ㄉ' to "2", 'ˇ' to "3", 'ˋ' to "4", 'ㄓ' to "5", 'ˊ' to "6", '˙' to "7", 'ㄚ' to "8", 'ㄞ' to "9", 'ㄢ' to "0")
+        val r2 = listOf('ㄆ', 'ㄊ', 'ㄍ', 'ㄐ', 'ㄔ', 'ㄗ', 'ㄧ', 'ㄛ', 'ㄟ', 'ㄣ')
+        val r3 = listOf('ㄇ', 'ㄋ', 'ㄎ', 'ㄑ', 'ㄕ', 'ㄘ', 'ㄨ', 'ㄜ', 'ㄠ', 'ㄤ')
+        val r4 = listOf('ㄈ', 'ㄌ', 'ㄏ', 'ㄒ', 'ㄖ', 'ㄙ', 'ㄩ', 'ㄝ', 'ㄡ', 'ㄥ', 'ㄦ')
+
+        for ((ch, num) in r1) {
+            row1.addView(createZhuyinFullKey(ch, 1f, num))
+        }
+        for (ch in r2) {
+            row2.addView(createZhuyinFullKey(ch, 1f))
+        }
+        for (ch in r3) {
+            row3.addView(createZhuyinFullKey(ch, 1f))
+        }
+        for (ch in r4) {
+            row4.addView(createZhuyinFullKey(ch, 1f))
+        }
+    }
+
+    private fun createZhuyinFullKey(ch: Char, weight: Float, longClickChar: String? = null): Button {
+        return Button(this).apply {
+            text = ch.toString()
+            textSize = 17f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key)
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
+                setMargins(1, 2, 1, 2)
+            }
+            layoutParams = params
+            setOnClickListener {
+                triggerHapticFeedback()
+                handleZhuyinFullKey(ch)
+            }
+            if (longClickChar != null) {
+                setOnLongClickListener {
+                    triggerHapticFeedback()
+                    commitTextDirectly(longClickChar)
+                    true
+                }
+            }
+        }
+    }
+
+    private val ZHUYIN_INITIALS_STR = "ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙ"
+
+    private fun handleZhuyinFullKey(ch: Char) {
+        lastCommittedWord = null
+        if (customComposingWord != null || isHomophoneSelectionMode) {
+            customComposingWord = null
+            replacedCharsMap.clear()
+            isHomophoneSelectionMode = false
+            homophoneCharIndex = -1
+        }
+
+        // 聲調處理
+        if (ch in listOf('ˇ', 'ˋ', 'ˊ', '˙')) {
+            if (fullZhuyinBuffer.isNotEmpty()) {
+                fullZhuyinBuffer.append(ch)
+                val (_, candidates) = engine.setTone(ch)
+                updateComposingPreviewFull()
+                refreshUI(candidates)
+            } else {
+                commitTextDirectly(ch.toString())
+            }
+            return
+        }
+
+        fullZhuyinBuffer.append(ch)
+        val bufStr = fullZhuyinBuffer.toString()
+        updateComposingPreviewFull()
+
+        // 簡拼（偷懶輸入）偵測：
+        // 1. 全部為聲母或零聲母首符號且長度 >= 2 (如 ㄐㄊ, ㄋㄏ, ㄨㄇ, ㄊㄨ)
+        // 2. 或含有連續兩個聲母 (如 ㄐㄧㄣㄊ)
+        val isAllInitials = bufStr.length >= 2 && bufStr.all { it in ZHUYIN_INITIALS_STR || it in "ㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦ" }
+        val hasConsecutiveInitials = bufStr.length >= 2 && (0 until bufStr.length - 1).any {
+            bufStr[it] in ZHUYIN_INITIALS_STR && bufStr[it + 1] in ZHUYIN_INITIALS_STR
+        }
+
+        if (hasConsecutiveInitials || isAllInitials) {
+            val initialResults = engine.searchInitials(bufStr)
+            if (initialResults.isNotEmpty()) {
+                refreshUI(initialResults)
+                return
+            }
+        }
+
+        // 一般注音組字：轉成 9 鍵序列查詢字典
+        val keyId = com.bopomofo.t9ime.engine.KeyMapping.getKeyId(ch)
+        if (keyId != null) {
+            engine.pressKey(keyId)
+            checkAndCommitConfirmedPrefix()
+            refreshUI(engine.getCandidates())
+        }
+    }
+
+    private fun updateComposingPreviewFull() {
+        val preview = fullZhuyinBuffer.toString()
+        val finalPreview = if (isSimplified) ChineseConverter.toSimplified(preview) else preview
+        currentInputConnection?.setComposingText(finalPreview, 1)
+    }
+
+    private fun setupSymbolPanel(root: View) {
+        val tabFull = root.findViewById<Button>(R.id.tab_sym_fullwidth)
+        val tabHalf = root.findViewById<Button>(R.id.tab_sym_halfwidth)
+        val tabDpad = root.findViewById<Button>(R.id.tab_sym_dpad)
+        val tabMath = root.findViewById<Button>(R.id.tab_sym_math)
+        val btnClose = root.findViewById<Button>(R.id.btn_close_symbol_panel)
+
+        containerSymbolContent = root.findViewById(R.id.container_symbol_content)
+
+        tabFull?.setOnClickListener { triggerHapticFeedback(); switchSymbolTab(SymbolTab.FULLWIDTH) }
+        tabHalf?.setOnClickListener { triggerHapticFeedback(); switchSymbolTab(SymbolTab.HALFWIDTH) }
+        tabDpad?.setOnClickListener { triggerHapticFeedback(); switchSymbolTab(SymbolTab.DPAD) }
+        tabMath?.setOnClickListener { triggerHapticFeedback(); switchSymbolTab(SymbolTab.MATH) }
+        btnClose?.setOnClickListener { triggerHapticFeedback(); hideSymbolPanel() }
+
+        btnSymbolDrawer.setOnClickListener {
+            triggerHapticFeedback()
+            if (layoutSymbolPanel.visibility == View.VISIBLE) {
+                hideSymbolPanel()
+            } else {
+                showSymbolPanel()
+            }
+        }
+    }
+
+    private fun showSymbolPanel() {
+        layout12Key.visibility = View.GONE
+        layoutQwerty.visibility = View.GONE
+        if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
+        if (::layoutZhuyinFull.isInitialized) layoutZhuyinFull.visibility = View.GONE
+        layoutSymbolPanel.visibility = View.VISIBLE
+        btnSymbolDrawer.text = "✕"
+        switchSymbolTab(currentSymbolTab)
+    }
+
+    private fun hideSymbolPanel() {
+        layoutSymbolPanel.visibility = View.GONE
+        btnSymbolDrawer.text = "✛"
+        updateKeyboardModeUI()
+    }
+
+    private fun switchSymbolTab(tab: SymbolTab) {
+        currentSymbolTab = tab
+        val tabFull = rootView?.findViewById<Button>(R.id.tab_sym_fullwidth)
+        val tabHalf = rootView?.findViewById<Button>(R.id.tab_sym_halfwidth)
+        val tabDpad = rootView?.findViewById<Button>(R.id.tab_sym_dpad)
+        val tabMath = rootView?.findViewById<Button>(R.id.tab_sym_math)
+
+        val activeColor = ContextCompat.getColor(this, R.color.kb_accent)
+        val normalColor = ContextCompat.getColor(this, R.color.kb_text_primary)
+
+        tabFull?.setTextColor(if (tab == SymbolTab.FULLWIDTH) activeColor else normalColor)
+        tabHalf?.setTextColor(if (tab == SymbolTab.HALFWIDTH) activeColor else normalColor)
+        tabDpad?.setTextColor(if (tab == SymbolTab.DPAD) activeColor else normalColor)
+        tabMath?.setTextColor(if (tab == SymbolTab.MATH) activeColor else normalColor)
+
+        containerSymbolContent.removeAllViews()
+
+        when (tab) {
+            SymbolTab.DPAD -> containerSymbolContent.addView(createDpadView())
+            SymbolTab.FULLWIDTH -> {
+                val fullSymbols = listOf(
+                    "，", "。", "！", "？", "、", "；", "：", "～",
+                    "…", "「", "」", "『", "』", "《", "》", "（",
+                    "）", "【", "】", "〔", "〕", "“", "”", "‘", "’", "·", "—", "￥"
+                )
+                containerSymbolContent.addView(createSymbolGrid(fullSymbols, 7))
+            }
+            SymbolTab.HALFWIDTH -> {
+                val halfSymbols = listOf(
+                    ",", ".", "!", "?", ":", ";", "/", "\\",
+                    "~", "@", "#", "$", "%", "^", "&", "*",
+                    "-", "_", "+", "=", "(", ")", "[", "]",
+                    "{", "}", "<", ">", "\"", "'", "`", "|"
+                )
+                containerSymbolContent.addView(createSymbolGrid(halfSymbols, 8))
+            }
+            SymbolTab.MATH -> {
+                val mathSymbols = listOf(
+                    "↑", "↓", "←", "→", "±", "×", "÷", "≠",
+                    "≈", "≤", "≥", "℃", "★", "✔", "❤", "☺",
+                    "©", "®", "™", "¥", "€", "£", "§", "¶",
+                    "∞", "π", "√", "°", "‰", "▲", "▼", "◆"
+                )
+                containerSymbolContent.addView(createSymbolGrid(mathSymbols, 8))
+            }
+        }
+    }
+
+    private fun createDpadView(): View {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            weightSum = 3f
+        }
+
+        // 左側快捷操作
+        val leftActions = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.9f)
+        }
+        val btnHome = Button(this).apply {
+            text = "Home"
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { setMargins(2, 2, 2, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); sendDpadKey(KeyEvent.KEYCODE_MOVE_HOME) }
+        }
+        val btnSelectAll = Button(this).apply {
+            text = "全選"
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { setMargins(2, 2, 2, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); currentInputConnection?.performContextMenuAction(android.R.id.selectAll) }
+        }
+        val btnCopy = Button(this).apply {
+            text = "複製"
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { setMargins(2, 2, 2, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); currentInputConnection?.performContextMenuAction(android.R.id.copy) }
+        }
+        leftActions.addView(btnHome)
+        leftActions.addView(btnSelectAll)
+        leftActions.addView(btnCopy)
+
+        // 中間十字方向鍵盤
+        val centerDpad = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.2f)
+        }
+
+        val rowUp = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+            gravity = Gravity.CENTER
+        }
+        val btnUp = Button(this).apply {
+            text = "▲"
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key)
+            val p = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { setMargins(4, 2, 4, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); sendDpadKey(KeyEvent.KEYCODE_DPAD_UP) }
+        }
+        rowUp.addView(btnUp)
+
+        val rowMid = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+        val btnLeft = Button(this).apply {
+            text = "◀"
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key)
+            val p = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { setMargins(2, 2, 2, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); sendDpadKey(KeyEvent.KEYCODE_DPAD_LEFT) }
+        }
+        val btnEnter = Button(this).apply {
+            text = "↵"
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val p = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { setMargins(2, 2, 2, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); performEnterAction() }
+        }
+        val btnRight = Button(this).apply {
+            text = "▶"
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key)
+            val p = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { setMargins(2, 2, 2, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); sendDpadKey(KeyEvent.KEYCODE_DPAD_RIGHT) }
+        }
+        rowMid.addView(btnLeft)
+        rowMid.addView(btnEnter)
+        rowMid.addView(btnRight)
+
+        val rowDown = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+            gravity = Gravity.CENTER
+        }
+        val btnDown = Button(this).apply {
+            text = "▼"
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key)
+            val p = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { setMargins(4, 2, 4, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); sendDpadKey(KeyEvent.KEYCODE_DPAD_DOWN) }
+        }
+        rowDown.addView(btnDown)
+
+        centerDpad.addView(rowUp)
+        centerDpad.addView(rowMid)
+        centerDpad.addView(rowDown)
+
+        // 右側快捷操作
+        val rightActions = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.9f)
+        }
+        val btnEnd = Button(this).apply {
+            text = "End"
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { setMargins(2, 2, 2, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); sendDpadKey(KeyEvent.KEYCODE_MOVE_END) }
+        }
+        val btnCut = Button(this).apply {
+            text = "剪下"
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { setMargins(2, 2, 2, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); currentInputConnection?.performContextMenuAction(android.R.id.cut) }
+        }
+        val btnPaste = Button(this).apply {
+            text = "貼上"
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val p = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { setMargins(2, 2, 2, 2) }
+            layoutParams = p
+            setOnClickListener { triggerHapticFeedback(); currentInputConnection?.performContextMenuAction(android.R.id.paste) }
+        }
+        rightActions.addView(btnEnd)
+        rightActions.addView(btnCut)
+        rightActions.addView(btnPaste)
+
+        root.addView(leftActions)
+        root.addView(centerDpad)
+        root.addView(rightActions)
+        return root
+    }
+
+    private fun createSymbolGrid(symbols: List<String>, columns: Int): View {
+        val scrollView = ScrollView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            isVerticalScrollBarEnabled = false
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+
+        var currentRow: LinearLayout? = null
+        for ((idx, sym) in symbols.withIndex()) {
+            if (idx % columns == 0) {
+                currentRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 46.dpToPx())
+                }
+                container.addView(currentRow)
+            }
+            val btn = Button(this).apply {
+                text = sym
+                textSize = 17f
+                setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+                setBackgroundResource(R.drawable.bg_key)
+                val p = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { setMargins(1, 1, 1, 1) }
+                layoutParams = p
+                setOnClickListener {
+                    triggerHapticFeedback()
+                    commitTextDirectly(sym)
+                }
+            }
+            currentRow?.addView(btn)
+        }
+        scrollView.addView(container)
+        return scrollView
+    }
+
+    private fun Int.dpToPx(): Int = (this * resources.displayMetrics.density).toInt()
+
+    private fun sendDpadKey(keyCode: Int) {
+        currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+        currentInputConnection?.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
     }
 
     private lateinit var btnSym1: Button
@@ -837,6 +1205,12 @@ class ZhuyinInputMethodService : InputMethodService() {
      * - 若無組字狀態，則送出正常的換行 (KEYCODE_ENTER) 事件。
      */
     private fun performEnterAction() {
+        if (currentMode == KeyboardMode.ZHUYIN_FULL && fullZhuyinBuffer.isNotEmpty()) {
+            val candidates = engine.getCandidates()
+            val word = candidates.firstOrNull()?.word ?: fullZhuyinBuffer.toString()
+            commitProcessedWordWithUserDict(word)
+            return
+        }
         if (engine.hasComposing()) {
             val topWord = customComposingWord ?: engine.getCandidates().firstOrNull()?.word ?: engine.getTopComposingWord()
             commitProcessedWordWithUserDict(topWord)
@@ -850,7 +1224,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         // 只要不是簡體模式，逗號/句號就輸出全形（適用注音、數字、手寫模式）
         // 英文模式下強制半形
         return when (currentMode) {
-            KeyboardMode.ENGLISH_T9, KeyboardMode.ENGLISH_QWERTY -> false
+            KeyboardMode.ENGLISH_QWERTY -> false
             else -> !isSimplified
         }
     }
@@ -860,83 +1234,124 @@ class ZhuyinInputMethodService : InputMethodService() {
         btnComma = root.findViewById(R.id.btn_comma)
         btnPeriod = root.findViewById(R.id.btn_period)
 
+        // 1. 123 數字/符號模式切換
         btnMode123.setOnClickListener {
             triggerHapticFeedback()
             currentMode = if (currentMode == KeyboardMode.NUMBER_SYM) KeyboardMode.ZHUYIN else KeyboardMode.NUMBER_SYM
             engine.clear()
+            fullZhuyinBuffer.clear()
             lastCommittedWord = null
-            resetT9MultiTap()
             currentInputConnection?.setComposingText("", 1)
             refreshUI(emptyList())
             updateKeyboardModeUI()
         }
 
-        // 123 鍵回歸單純點擊切換
-        btnMode123.setOnLongClickListener(null)
+        // 2. 左側鍵（數字模式下為括號雙向滑動鍵）
+        btnQwertyToggle.onTapListener = {
+            triggerHapticFeedback()
+            commitTextDirectly("()")
+            sendDpadKey(KeyEvent.KEYCODE_DPAD_LEFT)
+        }
+        btnQwertyToggle.onSwipeListener = { direction ->
+            triggerHapticFeedback()
+            when (direction) {
+                SwipeKeyButton.Direction.LEFT -> {
+                    val lBracket = if (isTraditionalMode()) "（" else "("
+                    commitSymbol(lBracket)
+                }
+                SwipeKeyButton.Direction.RIGHT -> {
+                    val rBracket = if (isTraditionalMode()) "）" else ")"
+                    commitSymbol(rBracket)
+                }
+                else -> {}
+            }
+        }
 
-        // 長按 中/EN 鍵開啟設定畫面，介面帶有 ⚙ 齒輪提示
+        // 3. 右下角模式樞紐鍵 (中: 9鍵↔全鍵盤, 長按繁簡; 英: 大小寫三態; 數字: 回注音)
+        btnLangToggle.setOnClickListener {
+            triggerHapticFeedback()
+            when (currentMode) {
+                KeyboardMode.ZHUYIN -> {
+                    currentMode = KeyboardMode.ZHUYIN_FULL
+                    engine.clear()
+                    fullZhuyinBuffer.clear()
+                    currentInputConnection?.setComposingText("", 1)
+                    refreshUI(emptyList())
+                    updateKeyboardModeUI()
+                }
+                KeyboardMode.ZHUYIN_FULL -> {
+                    currentMode = KeyboardMode.ZHUYIN
+                    engine.clear()
+                    fullZhuyinBuffer.clear()
+                    currentInputConnection?.setComposingText("", 1)
+                    refreshUI(emptyList())
+                    updateKeyboardModeUI()
+                }
+                KeyboardMode.ENGLISH_QWERTY -> {
+                    cycleEnglishCase()
+                }
+                KeyboardMode.NUMBER_SYM -> {
+                    currentMode = KeyboardMode.ZHUYIN
+                    engine.clear()
+                    fullZhuyinBuffer.clear()
+                    currentInputConnection?.setComposingText("", 1)
+                    refreshUI(emptyList())
+                    updateKeyboardModeUI()
+                }
+                KeyboardMode.HANDWRITING -> {
+                    performBackspace()
+                }
+            }
+        }
+
         btnLangToggle.setOnLongClickListener {
-            openSettings()
-            true
+            triggerHapticFeedback()
+            when (currentMode) {
+                KeyboardMode.ZHUYIN, KeyboardMode.ZHUYIN_FULL, KeyboardMode.NUMBER_SYM -> {
+                    isSimplified = !isSimplified
+                    updateKeyboardModeUI()
+                    if (engine.hasComposing()) {
+                        refreshUI(engine.getCandidates())
+                    }
+                    true
+                }
+                KeyboardMode.ENGLISH_QWERTY -> {
+                    openSettings()
+                    true
+                }
+                else -> false
+            }
         }
 
         btnSpaceSwipe.transformationMethod = null
         btnSpaceSwipe.includeFontPadding = false
         btnSpaceSwipe.setLineSpacing(0f, 0.9f)
 
-        // 提供空白鍵四向滑動指示盤（向左向右提示切換簡體/手寫）
+        // 4. 空白鍵四向滑動指示盤（提示左滑/右滑切換語言模式）
         btnSpaceSwipe.swipeLabelsProvider = {
-            if (currentMode == KeyboardMode.ZHUYIN || currentMode == KeyboardMode.HANDWRITING) {
-                when (chineseSubMode) {
-                    ChineseInputSubMode.TRADITIONAL -> mapOf(
-                        SwipeKeyButton.Direction.LEFT to "簡體",
-                        SwipeKeyButton.Direction.RIGHT to "手寫"
-                    )
-                    ChineseInputSubMode.SIMPLIFIED -> mapOf(
-                        SwipeKeyButton.Direction.LEFT to "手寫",
-                        SwipeKeyButton.Direction.RIGHT to "繁體"
-                    )
-                    ChineseInputSubMode.HANDWRITING -> mapOf(
-                        SwipeKeyButton.Direction.LEFT to "繁體",
-                        SwipeKeyButton.Direction.RIGHT to "簡體"
-                    )
-                }
-            } else {
-                emptyMap()
+            when (currentMode) {
+                KeyboardMode.ZHUYIN, KeyboardMode.ZHUYIN_FULL -> mapOf(
+                    SwipeKeyButton.Direction.LEFT to "手寫",
+                    SwipeKeyButton.Direction.RIGHT to "英文"
+                )
+                KeyboardMode.ENGLISH_QWERTY -> mapOf(
+                    SwipeKeyButton.Direction.LEFT to "中文",
+                    SwipeKeyButton.Direction.RIGHT to "手寫"
+                )
+                KeyboardMode.HANDWRITING -> mapOf(
+                    SwipeKeyButton.Direction.LEFT to "英文",
+                    SwipeKeyButton.Direction.RIGHT to "中文"
+                )
+                KeyboardMode.NUMBER_SYM -> mapOf(
+                    SwipeKeyButton.Direction.LEFT to "手寫",
+                    SwipeKeyButton.Direction.RIGHT to "中文"
+                )
             }
-        }
-
-        btnQwertyToggle.setOnClickListener {
-            triggerHapticFeedback()
-            // 26鍵 ↔ 數字/英文9鍵（NUMBER_SYM 承擔原本 ENGLISH_T9 角色）
-            currentMode = if (currentMode == KeyboardMode.ENGLISH_QWERTY)
-                KeyboardMode.NUMBER_SYM else KeyboardMode.ENGLISH_QWERTY
-            engine.clear()
-            lastCommittedWord = null
-            resetT9MultiTap()
-            currentInputConnection?.setComposingText("", 1)
-            refreshUI(emptyList())
-            updateKeyboardModeUI()
-        }
-
-        btnLangToggle.setOnClickListener {
-            triggerHapticFeedback()
-            currentMode = when (currentMode) {
-                KeyboardMode.ZHUYIN, KeyboardMode.NUMBER_SYM, KeyboardMode.HANDWRITING -> KeyboardMode.ENGLISH_QWERTY
-                KeyboardMode.ENGLISH_T9, KeyboardMode.ENGLISH_QWERTY -> KeyboardMode.ZHUYIN
-            }
-            engine.clear()
-            lastCommittedWord = null
-            resetT9MultiTap()
-            currentInputConnection?.setComposingText("", 1)
-            refreshUI(emptyList())
-            updateKeyboardModeUI()
         }
 
         btnSpaceSwipe.onTapListener = {
             triggerHapticFeedback()
-            resetT9MultiTap()
-            if (engine.hasComposing()) {
+            if (engine.hasComposing() || fullZhuyinBuffer.isNotEmpty()) {
                 val topWord = customComposingWord ?: engine.getCandidates().firstOrNull()?.word ?: engine.getTopComposingWord()
                 commitProcessedWordWithUserDict(topWord)
             } else {
@@ -947,42 +1362,32 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         btnSpaceSwipe.onSwipeListener = { direction ->
             triggerHapticFeedback()
-            if (direction == SwipeKeyButton.Direction.LEFT || direction == SwipeKeyButton.Direction.RIGHT) {
-                if (currentMode == KeyboardMode.ENGLISH_QWERTY || currentMode == KeyboardMode.NUMBER_SYM) {
-                    // QWERTY 與 數字 9 鍵模式：滑動空白鍵保持輸入空格（移除歷史殘留的大寫切換）
-                    commitTextDirectly(" ")
-                } else if (currentMode == KeyboardMode.ENGLISH_T9) {
-                    // 英文 T9 模式下：滑動切換「大小寫」
-                    isCapsLock = !isCapsLock
-                    btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
-                    updateKeyboardModeUI()
-                } else {
-                    // 中文模式下：左滑手寫，右滑簡繁
-                    if (direction == SwipeKeyButton.Direction.LEFT) {
-                        chineseSubMode = if (chineseSubMode == ChineseInputSubMode.HANDWRITING) ChineseInputSubMode.TRADITIONAL else ChineseInputSubMode.HANDWRITING
-                    } else {
-                        chineseSubMode = if (chineseSubMode == ChineseInputSubMode.SIMPLIFIED) ChineseInputSubMode.TRADITIONAL else ChineseInputSubMode.SIMPLIFIED
-                    }
+            engine.clear()
+            fullZhuyinBuffer.clear()
+            currentInputConnection?.setComposingText("", 1)
+            refreshUI(emptyList())
 
-                    if (chineseSubMode == ChineseInputSubMode.HANDWRITING) {
-                        currentMode = KeyboardMode.HANDWRITING
-                        engine.clear()
-                        currentInputConnection?.setComposingText("", 1)
-                        if (::handwritingCanvas.isInitialized) {
-                            handwritingCanvas.clearCanvas()
-                        }
-                    } else {
-                        currentMode = KeyboardMode.ZHUYIN
-                    }
-
-                    updateKeyboardModeUI()
-                    if (engine.hasComposing()) {
-                        refreshUI(engine.getCandidates())
-                    } else if (lastCommittedWord != null) {
-                        showNextWordPredictions(lastCommittedWord!!)
-                    }
+            if (direction == SwipeKeyButton.Direction.RIGHT) {
+                currentMode = when (currentMode) {
+                    KeyboardMode.ZHUYIN, KeyboardMode.ZHUYIN_FULL -> KeyboardMode.ENGLISH_QWERTY
+                    KeyboardMode.ENGLISH_QWERTY -> KeyboardMode.HANDWRITING
+                    KeyboardMode.HANDWRITING -> KeyboardMode.ZHUYIN
+                    KeyboardMode.NUMBER_SYM -> KeyboardMode.ZHUYIN
+                }
+            } else if (direction == SwipeKeyButton.Direction.LEFT) {
+                currentMode = when (currentMode) {
+                    KeyboardMode.ZHUYIN, KeyboardMode.ZHUYIN_FULL -> KeyboardMode.HANDWRITING
+                    KeyboardMode.HANDWRITING -> KeyboardMode.ENGLISH_QWERTY
+                    KeyboardMode.ENGLISH_QWERTY -> KeyboardMode.ZHUYIN
+                    KeyboardMode.NUMBER_SYM -> KeyboardMode.HANDWRITING
                 }
             }
+
+            if (currentMode == KeyboardMode.HANDWRITING && ::handwritingCanvas.isInitialized) {
+                handwritingCanvas.clearCanvas()
+            }
+
+            updateKeyboardModeUI()
         }
 
         // 空白鍵長按快選常用標點（，。？！……：）
@@ -1063,56 +1468,97 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun updateKeyboardModeUI() {
+        if (::layoutSymbolPanel.isInitialized) layoutSymbolPanel.visibility = View.GONE
+        if (::btnSymbolDrawer.isInitialized) btnSymbolDrawer.text = "✛"
+
+        btnLangToggle.transformationMethod = null
+        btnLangToggle.includeFontPadding = false
+        btnLangToggle.setLineSpacing(0f, 0.9f)
+        btnLangToggle.setOnTouchListener(null)
+
+        btnSpaceSwipe.transformationMethod = null
+        btnSpaceSwipe.includeFontPadding = false
+        btnSpaceSwipe.setLineSpacing(0f, 0.9f)
+
         when (currentMode) {
             KeyboardMode.ZHUYIN -> {
                 layout12Key.visibility = View.VISIBLE
+                if (::layoutZhuyinFull.isInitialized) layoutZhuyinFull.visibility = View.GONE
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
-                btnMode123.text = "123"
-                btnLangToggle.transformationMethod = null
-                btnLangToggle.includeFontPadding = false
-                btnLangToggle.setLineSpacing(0f, 0.9f)
-                btnLangToggle.text = formatLangKeyLabel("中/EN")
-                btnLangToggle.setOnTouchListener(null) // 恢復語言切換 click 行為
-                btnLangToggle.setOnLongClickListener {
-                    openSettings()
-                    true
-                }
 
-                btnSpaceSwipe.transformationMethod = null
-                btnSpaceSwipe.includeFontPadding = false
-                btnSpaceSwipe.setLineSpacing(0f, 0.9f)
-                btnSpaceSwipe.text = when (chineseSubMode) {
-                    ChineseInputSubMode.TRADITIONAL -> formatSpaceChineseSubModeLabel("繁", "手寫", "簡體")
-                    ChineseInputSubMode.SIMPLIFIED -> formatSpaceChineseSubModeLabel("簡", "手寫", "繁體")
-                    ChineseInputSubMode.HANDWRITING -> formatSpaceChineseSubModeLabel("手", "繁體", "簡體")
-                }
+                btnMode123.text = "123"
+                btnLangToggle.text = if (isSimplified) "9鍵·簡" else "9鍵·繁"
+                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "手寫", "英文")
                 btnQwertyToggle.visibility = View.GONE
+
                 update12KeyLabelsZhuyin()
                 if (::btnSymAt.isInitialized) {
-                    btnSymAt.text = "↵"  // 中文模式：@ 位置改為換行鍵
+                    btnSymAt.text = "↵"
+                    btnSymAt.visibility = View.VISIBLE
+                }
+                btnClear?.text = "清空"
+            }
+            KeyboardMode.ZHUYIN_FULL -> {
+                layout12Key.visibility = View.GONE
+                if (::layoutZhuyinFull.isInitialized) layoutZhuyinFull.visibility = View.VISIBLE
+                layoutQwerty.visibility = View.GONE
+                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
+
+                btnMode123.text = "123"
+                btnLangToggle.text = if (isSimplified) "全鍵·簡" else "全鍵·繁"
+                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "手寫", "英文")
+                btnQwertyToggle.visibility = View.GONE
+            }
+            KeyboardMode.NUMBER_SYM -> {
+                layout12Key.visibility = View.VISIBLE
+                if (::layoutZhuyinFull.isInitialized) layoutZhuyinFull.visibility = View.GONE
+                layoutQwerty.visibility = View.GONE
+                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
+
+                btnMode123.text = "注音"
+                btnLangToggle.text = if (isSimplified) "簡體" else "繁體"
+                btnSpaceSwipe.text = "空格"
+                btnQwertyToggle.visibility = View.VISIBLE
+                btnQwertyToggle.text = "( )"
+
+                update12KeyLabelsNumbers()
+                if (::btnSymAt.isInitialized) {
+                    btnSymAt.text = "@"
+                    btnSymAt.visibility = View.VISIBLE
+                }
+                btnClear?.text = "↵"
+            }
+            KeyboardMode.ENGLISH_QWERTY -> {
+                layout12Key.visibility = View.GONE
+                if (::layoutZhuyinFull.isInitialized) layoutZhuyinFull.visibility = View.GONE
+                layoutQwerty.visibility = View.VISIBLE
+                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
+
+                btnMode123.text = "123"
+                btnLangToggle.text = when (englishCaseState) {
+                    EnglishCaseState.LOWER -> "abc"
+                    EnglishCaseState.FIRST_UPPER -> "⇧Abc"
+                    EnglishCaseState.ALL_UPPER -> "⇪ABC"
+                }
+                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("EN", "中文", "手寫")
+                btnQwertyToggle.visibility = View.GONE
+
+                updateQwertyKeysText()
+                if (::btnSymAt.isInitialized) {
+                    btnSymAt.text = "@"
                     btnSymAt.visibility = View.VISIBLE
                 }
                 btnClear?.text = "清空"
             }
             KeyboardMode.HANDWRITING -> {
                 layout12Key.visibility = View.GONE
+                if (::layoutZhuyinFull.isInitialized) layoutZhuyinFull.visibility = View.GONE
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.VISIBLE
+
                 btnMode123.text = "123"
-                btnSpaceSwipe.transformationMethod = null
-                btnSpaceSwipe.includeFontPadding = false
-                btnSpaceSwipe.setLineSpacing(0f, 0.9f)
-                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("手", "繁體", "簡體")
-                btnQwertyToggle.visibility = View.GONE
-                if (::btnSymAt.isInitialized) {
-                    btnSymAt.text = "↵"  // 手寫模式：@ 位置改為換行鍵
-                    btnSymAt.visibility = View.VISIBLE
-                }
-                btnClear?.text = "清空"
-                // 手寫模式下「中/英」位置改為退格鍵
                 btnLangToggle.text = "⌫"
-                btnLangToggle.setOnLongClickListener(null)
                 btnLangToggle.setOnTouchListener { v, event ->
                     when (event.action) {
                         MotionEvent.ACTION_DOWN -> {
@@ -1132,72 +1578,10 @@ class ZhuyinInputMethodService : InputMethodService() {
                         else -> false
                     }
                 }
-            }
-            KeyboardMode.NUMBER_SYM -> {
-                layout12Key.visibility = View.VISIBLE
-                layoutQwerty.visibility = View.GONE
-                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
-                btnMode123.text = "注音"
-                btnLangToggle.transformationMethod = null
-                btnLangToggle.includeFontPadding = false
-                btnLangToggle.setLineSpacing(0f, 0.9f)
-                btnLangToggle.text = formatLangKeyLabel("中/EN")
-                btnLangToggle.setOnTouchListener(null)
-                btnLangToggle.setOnLongClickListener {
-                    openSettings()
-                    true
-                }
-                btnSpaceSwipe.text = "空格"
-                btnQwertyToggle.visibility = View.VISIBLE  // 可切換到 26 鍵英文
-                btnQwertyToggle.text = "26鍵"
-                update12KeyLabelsNumbers()
+                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("手", "英文", "中文")
+                btnQwertyToggle.visibility = View.GONE
                 if (::btnSymAt.isInitialized) {
-                    btnSymAt.text = "@"  // 數字模式：@ 位置保持 @
-                    btnSymAt.visibility = View.VISIBLE
-                }
-                btnClear?.text = "↵"  // 數字/英文模式：清空位置改為換行鍵
-            }
-            KeyboardMode.ENGLISH_T9 -> {
-                // 保留向下相容（正常流程不會到這裡）
-                layout12Key.visibility = View.VISIBLE
-                layoutQwerty.visibility = View.GONE
-                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
-                btnMode123.text = "123"
-                btnLangToggle.transformationMethod = null
-                btnLangToggle.includeFontPadding = false
-                btnLangToggle.setLineSpacing(0f, 0.9f)
-                btnLangToggle.text = formatLangKeyLabel("EN/中")
-                btnLangToggle.setOnTouchListener(null)
-                btnLangToggle.setOnLongClickListener {
-                    openSettings()
-                    true
-                }
-                btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
-                btnQwertyToggle.visibility = View.VISIBLE
-                btnQwertyToggle.text = "26鍵"
-                update12KeyLabelsT9English()
-                if (::btnSymAt.isInitialized) btnSymAt.visibility = View.GONE
-                btnClear?.text = "↵"
-            }
-            KeyboardMode.ENGLISH_QWERTY -> {
-                layout12Key.visibility = View.GONE
-                layoutQwerty.visibility = View.VISIBLE
-                if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
-                btnMode123.text = "123"
-                btnLangToggle.transformationMethod = null
-                btnLangToggle.includeFontPadding = false
-                btnLangToggle.setLineSpacing(0f, 0.9f)
-                btnLangToggle.text = formatLangKeyLabel("EN/中")
-                btnLangToggle.setOnTouchListener(null) // 恢復語言切換 click 行為
-                btnLangToggle.setOnLongClickListener {
-                    openSettings()
-                    true
-                }
-                btnSpaceSwipe.text = "空格"
-                btnQwertyToggle.visibility = View.GONE // 拿掉 26 鍵時的 9 鍵切換按鈕
-                updateQwertyKeysText()
-                if (::btnSymAt.isInitialized) {
-                    btnSymAt.text = "@"
+                    btnSymAt.text = "↵"
                     btnSymAt.visibility = View.VISIBLE
                 }
                 btnClear?.text = "清空"
@@ -1225,21 +1609,13 @@ class ZhuyinInputMethodService : InputMethodService() {
                 setupSymbolButton(btnSym4, "/", listOf("÷", "\\", "|"))
                 setupSymbolButton(btnSym5, "=", listOf("≠", "≈", "≤", "≥"))
             }
-            KeyboardMode.ZHUYIN -> {
+            KeyboardMode.ZHUYIN, KeyboardMode.ZHUYIN_FULL -> {
                 // 注音模式：常用全形標點（繁體中文高頻頓號置頂）
                 setupSymbolButton(btnSym1, "？", listOf("?", "¿"))
                 setupSymbolButton(btnSym2, "！", listOf("!", "¡"))
                 setupSymbolButton(btnSym3, "……", listOf("…", "—"))
                 setupSymbolButton(btnSym4, "：", listOf("；", "『", "』"))
                 setupSymbolButton(btnSym5, "、", listOf("～", "·", "《", "》"))
-            }
-            KeyboardMode.ENGLISH_T9 -> {
-                // 9鍵英文模式：半形標點
-                setupSymbolButton(btnSym1, "?", listOf("¿"))
-                setupSymbolButton(btnSym2, "!", listOf("¡"))
-                setupSymbolButton(btnSym3, "...", listOf("…", "—"))
-                setupSymbolButton(btnSym4, ":", listOf(";", "\""))
-                setupSymbolButton(btnSym5, "@", listOf("#", "$"))
             }
             KeyboardMode.ENGLISH_QWERTY -> {
                 // QWERTY 模式下 layout_12key 隱藏，但仍重設按鈕避免殘留
@@ -1433,6 +1809,35 @@ class ZhuyinInputMethodService : InputMethodService() {
         if (customComposingWord != null) {
             customComposingWord = null
             replacedCharsMap.clear()
+        }
+        if (currentMode == KeyboardMode.ZHUYIN_FULL && fullZhuyinBuffer.isNotEmpty()) {
+            fullZhuyinBuffer.deleteCharAt(fullZhuyinBuffer.length - 1)
+            if (fullZhuyinBuffer.isEmpty()) {
+                engine.clear()
+                currentInputConnection?.finishComposingText()
+                refreshUI(emptyList())
+            } else {
+                updateComposingPreviewFull()
+                val bufStr = fullZhuyinBuffer.toString()
+                val isAllInitials = bufStr.length >= 2 && bufStr.all { it in ZHUYIN_INITIALS_STR || it in "ㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦ" }
+                val hasConsecutiveInitials = bufStr.length >= 2 && (0 until bufStr.length - 1).any {
+                    bufStr[it] in ZHUYIN_INITIALS_STR && bufStr[it + 1] in ZHUYIN_INITIALS_STR
+                }
+                if (hasConsecutiveInitials || isAllInitials) {
+                    val initialResults = engine.searchInitials(bufStr)
+                    if (initialResults.isNotEmpty()) {
+                        refreshUI(initialResults)
+                        return
+                    }
+                }
+                if (engine.hasComposing()) {
+                    val candidates = engine.backspace()
+                    refreshUI(candidates)
+                } else {
+                    refreshUI(emptyList())
+                }
+            }
+            return
         }
         if (engine.hasComposing()) {
             val candidates = engine.backspace()
@@ -1772,6 +2177,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         lastComposingEnd = -1
 
         engine.clear()
+        fullZhuyinBuffer.clear()
         currentInputConnection?.finishComposingText()
         if (::handwritingCanvas.isInitialized) {
             handwritingCanvas.clearCanvas()
@@ -1872,12 +2278,12 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
 
         // 3. 英文模式下：實體鍵盤直接輸出字元
-        if (currentMode == KeyboardMode.ENGLISH_T9 || currentMode == KeyboardMode.ENGLISH_QWERTY) {
+        if (currentMode == KeyboardMode.ENGLISH_QWERTY) {
             return super.onKeyDown(keyCode, event)
         }
 
         // 4. 注音模式下的實體鍵盤處理
-        if (currentMode == KeyboardMode.ZHUYIN) {
+        if (currentMode == KeyboardMode.ZHUYIN || currentMode == KeyboardMode.ZHUYIN_FULL) {
             // A. Backspace 刪除
             if (keyCode == KeyEvent.KEYCODE_DEL) {
                 if (engine.hasComposing()) {

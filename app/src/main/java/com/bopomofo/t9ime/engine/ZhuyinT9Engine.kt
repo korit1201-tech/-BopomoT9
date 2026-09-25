@@ -35,6 +35,8 @@ class ZhuyinT9Engine(private val context: Context) {
     private var nextWordMap = mutableMapOf<String, MutableList<DictEntry>>()
     @Volatile
     private var charZhuyinMap = mutableMapOf<Char, MutableList<String>>()
+    @Volatile
+    private var initialMap = mutableMapOf<String, MutableList<DictEntry>>()
 
     @Volatile
     var isDictionaryLoaded = false
@@ -63,13 +65,15 @@ class ZhuyinT9Engine(private val context: Context) {
             val newTrie = TrieDictionary()
             val newNextWordMap = mutableMapOf<String, MutableList<DictEntry>>()
             val newCharZhuyinMap = mutableMapOf<Char, MutableList<String>>()
-            loadDictionaryInternal(newTrie, newNextWordMap, newCharZhuyinMap)
+            val newInitialMap = mutableMapOf<String, MutableList<DictEntry>>()
+            loadDictionaryInternal(newTrie, newNextWordMap, newCharZhuyinMap, newInitialMap)
             loadUserDictionaryEntries(newTrie, newCharZhuyinMap)
 
             mainHandler.post {
                 trie = newTrie
                 nextWordMap = newNextWordMap
                 charZhuyinMap = newCharZhuyinMap
+                initialMap = newInitialMap
                 isDictionaryLoaded = true
                 if (currentKeys.isNotEmpty()) {
                     recalculate()
@@ -107,7 +111,8 @@ class ZhuyinT9Engine(private val context: Context) {
     private fun loadDictionaryInternal(
         targetTrie: TrieDictionary,
         targetNextWordMap: MutableMap<String, MutableList<DictEntry>>,
-        targetCharZhuyinMap: MutableMap<Char, MutableList<String>>
+        targetCharZhuyinMap: MutableMap<Char, MutableList<String>>,
+        targetInitialMap: MutableMap<String, MutableList<DictEntry>>
     ) {
         val nextWordTrack = mutableMapOf<String, HashSet<String>>()
         var accumulatedWeight = 0L
@@ -127,6 +132,16 @@ class ZhuyinT9Engine(private val context: Context) {
                         val entry = DictEntry(word, zhuyin, weight)
                         targetTrie.insert(entry)
                         accumulatedWeight += weight
+
+                        // 構建簡拼（聲母偷懶輸入）索引表 (2~5字詞)
+                        val syllables = zhuyin.split(" ")
+                        if (syllables.size in 2..5) {
+                            val initials = syllables.mapNotNull { it.firstOrNull() }.joinToString("")
+                            if (initials.isNotEmpty()) {
+                                val list = targetInitialMap.getOrPut(initials) { ArrayList(4) }
+                                list.add(entry)
+                            }
+                        }
 
                         // 統計單字音節歷史頻率（教育部 429 個合法音節）與記錄單字注音查表
                         if (word.length == 1) {
@@ -505,6 +520,15 @@ class ZhuyinT9Engine(private val context: Context) {
                     list.add(0, zy)
                 }
             }
+            val syllables = zy.split(" ")
+            if (syllables.size in 2..5) {
+                val initials = syllables.mapNotNull { it.firstOrNull() }.joinToString("")
+                if (initials.isNotEmpty()) {
+                    val list = initialMap.getOrPut(initials) { ArrayList(4) }
+                    list.removeAll { it.word == word }
+                    list.add(0, DictEntry(word, zy, weight))
+                }
+            }
         }
     }
 
@@ -709,5 +733,18 @@ class ZhuyinT9Engine(private val context: Context) {
         }
 
         return resultList.take(15)
+    }
+
+    /**
+     * 41 鍵全鍵盤「聲母簡拼 / 偷懶輸入」查詢：
+     * 依各字的聲母（首字符號，如 "ㄐㄊ"）快速篩選詞庫，並以個人詞庫使用歷史優先排序
+     */
+    fun searchInitials(initials: String): List<DictEntry> {
+        if (initials.isEmpty()) return emptyList()
+        val list = initialMap[initials] ?: return emptyList()
+        return list.sortedWith(
+            compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
+                .thenByDescending { it.weight + userDict.getBoost(it.word) }
+        ).take(80)
     }
 }
