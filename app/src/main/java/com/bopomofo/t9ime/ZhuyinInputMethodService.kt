@@ -948,13 +948,13 @@ class ZhuyinInputMethodService : InputMethodService() {
         btnSpaceSwipe.onSwipeListener = { direction ->
             triggerHapticFeedback()
             if (direction == SwipeKeyButton.Direction.LEFT || direction == SwipeKeyButton.Direction.RIGHT) {
-                if (currentMode == KeyboardMode.ENGLISH_QWERTY) {
-                    // QWERTY 26 鍵模式：已有 SHIFT 鍵，滑動空白鍵保持輸入空格
+                if (currentMode == KeyboardMode.ENGLISH_QWERTY || currentMode == KeyboardMode.NUMBER_SYM) {
+                    // QWERTY 與 數字 9 鍵模式：滑動空白鍵保持輸入空格（移除歷史殘留的大寫切換）
                     commitTextDirectly(" ")
-                } else if (currentMode == KeyboardMode.ENGLISH_T9 || currentMode == KeyboardMode.NUMBER_SYM) {
-                    // 數字混合模式下：滑動切換「大小寫」
+                } else if (currentMode == KeyboardMode.ENGLISH_T9) {
+                    // 英文 T9 模式下：滑動切換「大小寫」
                     isCapsLock = !isCapsLock
-                    btnSpaceSwipe.text = if (isCapsLock) "大寫" else "空格"
+                    btnSpaceSwipe.text = if (isCapsLock) "大寫" else "小寫"
                     updateKeyboardModeUI()
                 } else {
                     // 中文模式下：左滑手寫，右滑簡繁
@@ -1147,7 +1147,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                     openSettings()
                     true
                 }
-                btnSpaceSwipe.text = if (isCapsLock) "大寫" else "空格"
+                btnSpaceSwipe.text = "空格"
                 btnQwertyToggle.visibility = View.VISIBLE  // 可切換到 26 鍵英文
                 btnQwertyToggle.text = "26鍵"
                 update12KeyLabelsNumbers()

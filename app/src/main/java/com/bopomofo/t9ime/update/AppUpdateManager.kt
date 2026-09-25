@@ -119,8 +119,11 @@ object AppUpdateManager {
      * 語意化版本比對 (v1 > v2 返回 1，v1 < v2 返回 -1，相等返回 0)
      */
     fun compareVersion(v1: String, v2: String): Int {
-        val s1 = v1.split(".").mapNotNull { it.toIntOrNull() }
-        val s2 = v2.split(".").mapNotNull { it.toIntOrNull() }
+        // 分割主版本號，過濾掉任何尾綴 (如 -beta1)
+        val clean1 = v1.split("-")[0]
+        val clean2 = v2.split("-")[0]
+        val s1 = clean1.split(".").mapNotNull { it.toIntOrNull() }
+        val s2 = clean2.split(".").mapNotNull { it.toIntOrNull() }
         val maxLen = maxOf(s1.size, s2.size)
 
         for (i in 0 until maxLen) {
