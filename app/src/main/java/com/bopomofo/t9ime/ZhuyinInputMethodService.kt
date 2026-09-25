@@ -753,7 +753,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         for (ch in r4) {
             row4.addView(createZhuyinFullKey(ch, 1f))
         }
-        row4.addView(createZhuyinFullDelKey(1.1f))
+        row4.addView(createZhuyinFullEnterKey(1.1f))
     }
 
     private fun createZhuyinFullKey(ch: Char, weight: Float, longClickChar: String? = null): Button {
@@ -808,6 +808,23 @@ class ZhuyinInputMethodService : InputMethodService() {
                     }
                     else -> false
                 }
+            }
+        }
+    }
+
+    private fun createZhuyinFullEnterKey(weight: Float): Button {
+        return Button(this).apply {
+            text = "↵"
+            textSize = 18f
+            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+            setBackgroundResource(R.drawable.bg_key_action)
+            val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, weight).apply {
+                setMargins(1, 2, 1, 2)
+            }
+            layoutParams = params
+            setOnClickListener {
+                triggerHapticFeedback()
+                performEnterAction()
             }
         }
     }
