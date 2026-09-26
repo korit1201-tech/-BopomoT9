@@ -321,8 +321,9 @@ class ZhuyinT9Engine(private val context: Context) {
      * 現代漢語詞長優先評分模型（Word Length Preference Model）：
      * 1. 現代漢語中雙字詞（2字詞）佔 75% 以上，三、四字詞次之，單字在連續按鍵下不應搶佔詞首。
      * 2. 當輸入按鍵數較多時（>= 3 鍵），優先保證 2、3、4 字合法詞排在最前面。
+     * 3. 統一度量衡：完全匹配詞享有合理長度加成 (1.8x)，但絕不允許低頻生僻怪詞（如「記憶喔」）依靠完全匹配直接踩下高頻常用大詞（如「今天」）！
      */
-    private fun getEffectiveWeight(entry: DictEntry, inputKeyCount: Int): Double {
+    private fun getEffectiveWeight(entry: DictEntry, inputKeyCount: Int, isExact: Boolean): Double {
         val userBoost = userDict.getBoost(entry.word)
         if (userBoost > 0) {
             return 1_000_000_000.0 + userBoost
@@ -341,8 +342,9 @@ class ZhuyinT9Engine(private val context: Context) {
             else -> 1.5
         }
 
+        val exactMultiplier = if (isExact) 1.8 else 1.0
         val tolerantMultiplier = if (entry.isTolerant) 0.35 else 1.0
-        return rawWeight * lengthMultiplier * tolerantMultiplier
+        return rawWeight * lengthMultiplier * exactMultiplier * tolerantMultiplier
     }
 
     // ───────── 核心查詢邏輯 ─────────
@@ -369,42 +371,45 @@ class ZhuyinT9Engine(private val context: Context) {
         val cleanKeys = currentKeys.filter { it != 11 }
         val phonemeKeyLen = cleanKeys.size
 
-        // Tier 1: 完全匹配詞排序（使用者常選優選詞穩居第一位，原生匹配字優先於容錯字，2/3/4字詞優先於散字）
-        val rankedExact = filterTone(exactResults).sortedWith(
-            compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
-                .thenByDescending { !it.isTolerant }
-                .thenByDescending { getEffectiveWeight(it, phonemeKeyLen) }
-        )
+        val filteredExact = filterTone(exactResults)
+        val filteredPrefix = filterTone(prefixResults)
 
-        // Tier 2: DP 最佳長句分詞（一口氣輸入較長句子 >= 4 鍵時）
+        // 統一度量衡評分池：將完全匹配與前綴預測統一納入評分，徹底杜絕冷門生僻怪詞霸佔首選！
+        val pool = mutableMapOf<String, Pair<DictEntry, Double>>()
+
+        for (e in filteredExact) {
+            val score = getEffectiveWeight(e, phonemeKeyLen, isExact = true)
+            pool[e.word] = Pair(e, score)
+        }
+
+        for (p in filteredPrefix) {
+            val score = getEffectiveWeight(p, phonemeKeyLen, isExact = false)
+            val existing = pool[p.word]
+            if (existing == null || score > existing.second) {
+                pool[p.word] = Pair(p, score)
+            }
+        }
+
+        val rankedList = pool.values
+            .sortedWith(
+                compareByDescending<Pair<DictEntry, Double>> { userDict.getBoost(it.first.word) > 0 }
+                    .thenByDescending { !it.first.isTolerant }
+                    .thenByDescending { it.second }
+            )
+            .map { it.first }
+
+        // DP 最佳長句分詞（一口氣輸入較長句子 >= 4 鍵時）
         val segmentedSentence = if (currentKeys.size >= 4) {
             findBestSentence(currentKeys)
         } else null
 
-        // Tier 3: 前綴預測詞排序（詞長優先：2字詞 > 3字詞 > 4字詞 > 單字）
-        val rankedPrefix = filterTone(prefixResults).sortedWith(
-            compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
-                .thenByDescending { !it.isTolerant }
-                .thenByDescending { getEffectiveWeight(it, phonemeKeyLen) }
-        )
-
-        // 組合候選詞（階梯式嚴格優先級）：
-        // 1. 若有字典完全匹配詞 (rankedExact)，真實高頻詞穩居第一位，絕不被拼裝詞干擾！
-        // 2. 若無完全匹配詞（純長句輸入），DP 分詞預測的完整句子置頂排在第一位（藍色高亮）！
-        // 3. 隨後依序排列前綴延伸詞 (rankedPrefix)
         val candidateList = mutableListOf<DictEntry>()
-        if (segmentedSentence != null && rankedExact.none { it.word == segmentedSentence.word }) {
-            if (rankedExact.isEmpty()) {
-                candidateList.add(segmentedSentence)
-                candidateList.addAll(rankedPrefix.filter { it.word != segmentedSentence.word })
-            } else {
-                candidateList.addAll(rankedExact)
-                candidateList.add(segmentedSentence)
-                candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
-            }
+        if (segmentedSentence != null && rankedList.none { it.word == segmentedSentence.word }) {
+            // 若為長句且 DP 找到了合理切分，將 DP 最佳長句放在最前
+            candidateList.add(segmentedSentence)
+            candidateList.addAll(rankedList.filter { it.word != segmentedSentence.word })
         } else {
-            candidateList.addAll(rankedExact)
-            candidateList.addAll(rankedPrefix.filter { p -> candidateList.none { it.word == p.word } })
+            candidateList.addAll(rankedList)
         }
 
         // 產生左側注音音節/詞彙組合列表（兼顧單字合法音節與多字詞組合，杜絕組合遺失與無字可選）
@@ -714,7 +719,7 @@ class ZhuyinT9Engine(private val context: Context) {
         // 6. 依據詞長偏好模型進行候選詞整體重排（2字詞 > 3字詞 > 4字詞 > 單字）
         results.sortWith(
             compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
-                .thenByDescending { getEffectiveWeight(it, cleanInput.length) }
+                .thenByDescending { getEffectiveWeight(it, cleanInput.length, isExact = false) }
         )
 
         return results
