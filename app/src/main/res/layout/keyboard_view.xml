@@ -651,14 +651,6 @@
                 </HorizontalScrollView>
 
 
-                <Button
-                    android:id="@+id/btn_close_symbol_panel"
-                    style="?android:attr/borderlessButtonStyle"
-                    android:layout_width="38dp"
-                    android:layout_height="match_parent"
-                    android:text="✕"
-                    android:textSize="15sp"
-                    android:textColor="@color/kb_text_secondary" />
             </LinearLayout>
 
             <!-- 內容區容器 (ScrollView 承載符號按鈕或方向鍵) -->

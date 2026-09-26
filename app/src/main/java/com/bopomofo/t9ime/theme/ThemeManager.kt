@@ -53,7 +53,6 @@ object ThemeManager {
         R.id.btn_sym_3,
         R.id.btn_sym_4,
         R.id.btn_sym_5,
-        R.id.btn_close_symbol_panel,
         R.id.btn_handwriting_clear
     )
 

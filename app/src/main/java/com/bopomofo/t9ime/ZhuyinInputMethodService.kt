@@ -1030,7 +1030,6 @@ class ZhuyinInputMethodService : InputMethodService() {
         val tabEmoji = root.findViewById<Button>(R.id.tab_sym_emoji)
         val tabKaomoji = root.findViewById<Button>(R.id.tab_sym_kaomoji)
         val tabSnippet = root.findViewById<Button>(R.id.tab_sym_snippet)
-        val btnClose = root.findViewById<Button>(R.id.btn_close_symbol_panel)
 
         containerSymbolContent = root.findViewById(R.id.container_symbol_content)
 
@@ -1041,7 +1040,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         tabClip?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.CLIPBOARD) }
         tabEmoji?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.EMOJI) }
         tabKaomoji?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.KAOMOJI) }
-        btnClose?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); hideSymbolPanel() }
+        tabSnippet?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.SNIPPET) }
 
         btnSymbolDrawer.setOnClickListener {
             triggerHapticFeedback(HapticType.MODE_SWITCH)
@@ -1610,6 +1609,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         btnPeriod = root.findViewById(R.id.btn_period)
 
         // 1. 123 數字/符號模式切換（長按打開設定）
+        btnMode123.includeFontPadding = false
         btnMode123.setOnClickListener {
             triggerHapticFeedback()
             currentMode = if (currentMode == KeyboardMode.NUMBER_SYM) KeyboardMode.ZHUYIN else KeyboardMode.NUMBER_SYM
@@ -1797,18 +1797,18 @@ class ZhuyinInputMethodService : InputMethodService() {
         startActivity(intent)
     }
 
-    private fun formatLangKeyLabel(lang: String): CharSequence {
-        val fullText = "$lang\n⚙"
+    private fun formatMode123Label(mainText: String): CharSequence {
+        val fullText = "$mainText\n⚙"
         val spannable = SpannableString(fullText)
-        val split = lang.length
+        val split = mainText.length
         val primaryColor = ContextCompat.getColor(this, R.color.kb_text_primary)
         val secondaryColor = ContextCompat.getColor(this, R.color.kb_text_secondary)
 
-        spannable.setSpan(RelativeSizeSpan(0.95f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(RelativeSizeSpan(0.88f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(StyleSpan(Typeface.BOLD), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(ForegroundColorSpan(primaryColor), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
 
-        spannable.setSpan(RelativeSizeSpan(0.60f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(RelativeSizeSpan(0.55f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(ForegroundColorSpan(secondaryColor), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         return spannable
     }
@@ -1849,6 +1849,10 @@ class ZhuyinInputMethodService : InputMethodService() {
         if (::layoutSymbolPanel.isInitialized) layoutSymbolPanel.visibility = View.GONE
         if (::btnSymbolDrawer.isInitialized) btnSymbolDrawer.text = "✛"
 
+        btnMode123.transformationMethod = null
+        btnMode123.includeFontPadding = false
+        btnMode123.setLineSpacing(0f, 0.85f)
+
         btnLangToggle.transformationMethod = null
         btnLangToggle.includeFontPadding = false
         btnLangToggle.setLineSpacing(0f, 0.9f)
@@ -1865,7 +1869,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
 
-                btnMode123.text = "123"
+                btnMode123.text = formatMode123Label("123")
                 btnLangToggle.text = if (isSimplified) "9鍵·簡" else "9鍵·繁"
                 btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "手寫", "英文")
                 btnQwertyToggle.visibility = View.GONE
@@ -1883,7 +1887,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
 
-                btnMode123.text = "123"
+                btnMode123.text = formatMode123Label("123")
                 btnLangToggle.text = if (isSimplified) "全鍵·簡" else "全鍵·繁"
                 btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "手寫", "英文")
                 btnQwertyToggle.visibility = View.GONE
@@ -1894,7 +1898,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
 
-                btnMode123.text = "注音"
+                btnMode123.text = formatMode123Label("注音")
                 btnLangToggle.text = if (isSimplified) "簡體" else "繁體"
                 btnSpaceSwipe.text = "空格"
                 btnQwertyToggle.visibility = View.VISIBLE
@@ -1913,7 +1917,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.VISIBLE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
 
-                btnMode123.text = "123"
+                btnMode123.text = formatMode123Label("123")
                 btnLangToggle.text = when (englishCaseState) {
                     EnglishCaseState.LOWER -> "abc"
                     EnglishCaseState.FIRST_UPPER -> "⇧Abc"
@@ -1935,7 +1939,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.VISIBLE
 
-                btnMode123.text = "123"
+                btnMode123.text = formatMode123Label("123")
                 btnLangToggle.text = "⌫"
                 btnLangToggle.setOnTouchListener { v, event ->
                     when (event.action) {
