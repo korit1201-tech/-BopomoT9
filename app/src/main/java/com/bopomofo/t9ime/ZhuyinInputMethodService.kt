@@ -454,6 +454,20 @@ class ZhuyinInputMethodService : InputMethodService() {
                             val (_, candidates) = engine.cycleTone()
                             refreshUI(candidates)
                         } else {
+                            // 前綴詞保護與智慧自動確認：
+                            // 若當前已有完整多字詞候選（長度 >= 2，如「目前」、「今天」），
+                            // 且當前按鍵序列加上新按鍵 keyNum 在字典中已無法組成更長詞彙，
+                            // 表示使用者按下此鍵是在輸入下一個字，立即自動確認提交前綴詞！
+                            val topCandidate = engine.getCandidates().firstOrNull()
+                            val curKeys = engine.getCurrentKeys()
+                            if (topCandidate != null && topCandidate.word.length >= 2 && curKeys.isNotEmpty()) {
+                                val testKeys = curKeys + keyNum
+                                val canExtendLongerWord = engine.hasPrefixOrExact(testKeys)
+                                if (!canExtendLongerWord) {
+                                    commitProcessedWordWithUserDict(topCandidate.word, topCandidate.zhuyin)
+                                }
+                            }
+
                             engine.pressKey(keyNum)
                             checkAndCommitConfirmedPrefix()
                             refreshUI(engine.getCandidates())
@@ -969,6 +983,20 @@ class ZhuyinInputMethodService : InputMethodService() {
             replacedCharsMap.clear()
             isHomophoneSelectionMode = false
             homophoneCharIndex = -1
+        }
+
+        // 前綴詞保護與智慧自動確認：
+        // 若當前已有完整多字詞候選（如簡拼或全拼成詞「目前」、「今天」），
+        // 且加上新按鍵 ch 後無法匹配任何候選詞，表示使用者正在輸入下一個字，立即自動確認上屏前綴詞！
+        if (fullZhuyinBuffer.isNotEmpty()) {
+            val curCands = engine.searchFullZhuyin(fullZhuyinBuffer.toString(), lastCommittedWord)
+            val topEntry = curCands.firstOrNull()
+            if (topEntry != null && topEntry.word.length >= 2) {
+                val nextTest = engine.searchFullZhuyin(fullZhuyinBuffer.toString() + ch, lastCommittedWord)
+                if (nextTest.isEmpty()) {
+                    commitProcessedWordWithUserDict(topEntry.word, topEntry.zhuyin)
+                }
+            }
         }
 
         fullZhuyinBuffer.append(ch)
@@ -2642,6 +2670,8 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         engine.clear()
         fullZhuyinBuffer.clear()
+        val finalText = if (isSimplified) ChineseConverter.toSimplified(word) else word
+        currentInputConnection?.commitText(finalText, 1)
         currentInputConnection?.finishComposingText()
         if (::handwritingCanvas.isInitialized) {
             handwritingCanvas.clearCanvas()
@@ -2778,10 +2808,15 @@ class ZhuyinInputMethodService : InputMethodService() {
                 return super.onKeyDown(keyCode, event)
             }
 
-            // D. 數字鍵選字 (1~9 選候選字)
-            if (engine.hasComposing() && keyCode in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_9) {
+            // D. 數字鍵選字 (1~9 選候選字，支援 9 鍵與 41 鍵全鍵盤)
+            val hasActiveComposing = engine.hasComposing() || fullZhuyinBuffer.isNotEmpty()
+            if (hasActiveComposing && keyCode in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_9) {
                 val selectIndex = keyCode - KeyEvent.KEYCODE_1
-                val candidates = engine.getCandidates()
+                val candidates = if (currentMode == KeyboardMode.ZHUYIN_FULL) {
+                    engine.searchFullZhuyin(fullZhuyinBuffer.toString(), lastCommittedWord)
+                } else {
+                    engine.getCandidates()
+                }
                 if (selectIndex < candidates.size) {
                     selectCandidate(candidates[selectIndex])
                     return true

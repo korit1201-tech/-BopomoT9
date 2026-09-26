@@ -308,6 +308,8 @@ class ZhuyinT9Engine(private val context: Context) {
 
     fun hasComposing(): Boolean = currentKeys.isNotEmpty()
 
+    fun getCurrentKeys(): List<Int> = currentKeys.toList()
+
     fun selectZhuyinCombo(zhuyin: String): List<DictEntry> {
         // 點選同一個音節按鈕支援切換解除鎖定 (Toggle)
         lockedZhuyinCombo = if (lockedZhuyinCombo == zhuyin) null else zhuyin
@@ -478,13 +480,20 @@ class ZhuyinT9Engine(private val context: Context) {
     }
 
     /**
+     * 檢查給定按鍵序列在 Trie 中是否存在完全匹配或前綴延伸詞
+     */
+    fun hasPrefixOrExact(sequence: List<Int>): Boolean {
+        return trie.searchNode(sequence) != null
+    }
+
+    /**
      * 長句輸入滑動窗口自動確認 (Sliding Window Prefix Commit)
-     * 當連續輸入的字數/按鍵較多（>= 8 鍵，約 3~4 字以上），且前面分詞已經十分肯定時，
+     * 當連續輸入的字數/按鍵較多，且前面分詞已經十分肯定時，
      * 直接將穩定的第一段詞彙提前上屏確認，留存後續按鍵繼續拼音。
      */
     fun pollConfirmedPrefix(): Pair<String, Int>? {
         val cleanKeys = currentKeys.filter { it != 11 }
-        if (cleanKeys.size < 6) return null
+        if (cleanKeys.size < 4) return null
 
         val segments = findBestSentenceSegments(cleanKeys) ?: return null
         if (segments.size < 2) return null
@@ -492,10 +501,10 @@ class ZhuyinT9Engine(private val context: Context) {
         val firstSegment = segments[0] // Pair(word, keyLen)
         val remainingKeyCount = cleanKeys.size - firstSegment.second
 
-        // 判定條件（1.6.5 更積極提早確認前綴，防止後續按鍵干擾已確認字詞）：
+        // 判定條件：
         // 1. 分詞至少有 3 段 (例如: 今天 + 天氣 + 很...)
-        // 2. 或第一段詞長 >= 2 字 (例如: 今天)，且後續剩餘按鍵 >= 3 鍵 (後面至少還有 1 個字)
-        val shouldCommit = segments.size >= 3 || (firstSegment.first.length >= 2 && remainingKeyCount >= 3)
+        // 2. 或第一段詞長 >= 2 字 (例如: 目前、今天)，且後續已有新輸入 (remainingKeyCount >= 1)
+        val shouldCommit = segments.size >= 3 || (firstSegment.first.length >= 2 && remainingKeyCount >= 1)
         if (!shouldCommit) return null
 
         val keysToRemove = firstSegment.second
@@ -598,19 +607,6 @@ class ZhuyinT9Engine(private val context: Context) {
         val results = mutableListOf<DictEntry>()
         val seenWords = hashSetOf<String>()
 
-        // 0. 中英混打 (Code-Switching Beta)：若輸入帶有英文字母，直接提供原生英文候選（原樣、首字母大寫、全大寫）
-        val hasAscii = inputZhuyin.any { it in 'a'..'z' || it in 'A'..'Z' }
-        if (hasAscii) {
-            val lower = inputZhuyin.lowercase()
-            val capitalized = lower.replaceFirstChar { it.uppercase() }
-            val upper = inputZhuyin.uppercase()
-
-            if (seenWords.add(inputZhuyin)) results.add(DictEntry(inputZhuyin, "", 80_000_000))
-            if (seenWords.add(capitalized)) results.add(DictEntry(capitalized, "", 79_000_000))
-            if (seenWords.add(upper)) results.add(DictEntry(upper, "", 78_000_000))
-            if (seenWords.add(lower)) results.add(DictEntry(lower, "", 77_000_000))
-        }
-
         val cleanInput = inputZhuyin.filter { it !in "ˇˋˊ˙" }
 
         // 1. 個人詞庫 (UserDict) 最高優先權
@@ -692,15 +688,7 @@ class ZhuyinT9Engine(private val context: Context) {
             }
         }
 
-        // 6. 常用 Emoji 聯想直出 (如 ㄒㄧㄣ -> ❤️, ㄒㄧㄠ -> 😄, ㄎㄨ -> 😭)
-        val emojis = EmojiKaomojiManager.getEmojisForZhuyin(inputZhuyin)
-        for (emoji in emojis) {
-            if (seenWords.add(emoji)) {
-                results.add(DictEntry(emoji, inputZhuyin, 300))
-            }
-        }
-
-        // 7. 若有上下文前詞，給予 Bigram 語境加權重排
+        // 6. 若有上下文前詞，給予 Bigram 語境加權重排
         val activeContext = contextWord ?: currentContextWord
         if (activeContext != null) {
             results.sortByDescending { it.weight + getBigramBoost(activeContext, it.word) * 20_000 }
