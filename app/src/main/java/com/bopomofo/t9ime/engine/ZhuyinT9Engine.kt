@@ -38,6 +38,9 @@ class ZhuyinT9Engine(private val context: Context) {
     @Volatile
     private var initialMap = mutableMapOf<String, MutableList<DictEntry>>()
 
+    // Bigram 語境關聯索引：prevWord -> (nextWord -> weight)
+    private val bigramMap = HashMap<String, MutableMap<String, Int>>()
+
     @Volatile
     var isDictionaryLoaded = false
         private set
@@ -50,6 +53,7 @@ class ZhuyinT9Engine(private val context: Context) {
     }
 
     init {
+        initDefaultBigrams()
         loadUserDictionaryEntries(trie, charZhuyinMap)
         userDict.onDictionaryChangedListener = {
             loadUserDictionaryEntries(trie, charZhuyinMap)
@@ -58,6 +62,44 @@ class ZhuyinT9Engine(private val context: Context) {
             }
         }
         startAsyncDictionaryLoading()
+    }
+
+    private fun initDefaultBigrams() {
+        addBigramPair("去看", "醫生", 800)
+        addBigramPair("看", "醫生", 600)
+        addBigramPair("去", "醫院", 700)
+        addBigramPair("醫院", "看病", 800)
+        addBigramPair("醫院", "吃藥", 600)
+        addBigramPair("吃", "飯", 800)
+        addBigramPair("吃", "藥", 600)
+        addBigramPair("洗", "澡", 800)
+        addBigramPair("洗", "手", 700)
+        addBigramPair("睡", "覺", 800)
+        addBigramPair("喝", "水", 800)
+        addBigramPair("喝", "茶", 600)
+        addBigramPair("喝", "咖啡", 700)
+        addBigramPair("今天", "天氣", 700)
+        addBigramPair("大家", "好", 800)
+        addBigramPair("非常", "感謝", 800)
+        addBigramPair("祝你", "順心", 800)
+        addBigramPair("台灣", "大學", 600)
+        addBigramPair("台灣", "高鐵", 700)
+        addBigramPair("捷運", "站", 700)
+    }
+
+    private fun addBigramPair(prev: String, next: String, weight: Int) {
+        val nextMap = bigramMap.getOrPut(prev) { HashMap() }
+        nextMap[next] = (nextMap[next] ?: 0) + weight
+    }
+
+    fun learnBigram(prevWord: String, nextWord: String) {
+        if (prevWord.isBlank() || nextWord.isBlank()) return
+        addBigramPair(prevWord, nextWord, 500)
+    }
+
+    fun getBigramBoost(prevWord: String?, candidateWord: String): Int {
+        if (prevWord == null) return 0
+        return bigramMap[prevWord]?.get(candidateWord) ?: 0
     }
 
     private fun startAsyncDictionaryLoading() {
@@ -475,17 +517,25 @@ class ZhuyinT9Engine(private val context: Context) {
         return Pair(firstSegment.first, keysToRemove)
     }
 
+    var currentContextWord: String? = null
+
     private fun applyLockFilter(baseList: List<DictEntry>) {
+        val candidateList = if (currentContextWord != null) {
+            baseList.sortedByDescending { it.weight + getBigramBoost(currentContextWord, it.word) * 20_000 }
+        } else {
+            baseList
+        }
+
         val locked = lockedZhuyinCombo
         if (locked != null) {
             val cleanLock = locked.filter { it !in "ˇˋˊ˙" }
-            val filtered = baseList.filter { entry ->
+            val filtered = candidateList.filter { entry ->
                 entry.zhuyin.filter { it !in "ˇˋˊ˙" }.startsWith(cleanLock)
             }
-            cachedCandidates = if (filtered.isNotEmpty()) filtered else baseList
+            cachedCandidates = if (filtered.isNotEmpty()) filtered else candidateList
             return
         }
-        cachedCandidates = baseList
+        cachedCandidates = candidateList
     }
 
     private fun recalculateCandidatesOnly() {
@@ -542,12 +592,26 @@ class ZhuyinT9Engine(private val context: Context) {
     /**
      * 41 鍵大千注音全鍵盤專屬預測與候選檢索引擎（支援聲母簡拼、混合簡打與全拼聯想）
      */
-    fun searchFullZhuyin(inputZhuyin: String): List<DictEntry> {
+    fun searchFullZhuyin(inputZhuyin: String, contextWord: String? = null): List<DictEntry> {
         if (inputZhuyin.isEmpty()) return emptyList()
 
-        val cleanInput = inputZhuyin.filter { it !in "ˇˋˊ˙" }
         val results = mutableListOf<DictEntry>()
         val seenWords = hashSetOf<String>()
+
+        // 0. 中英混打 (Code-Switching Beta)：若輸入帶有英文字母，直接提供原生英文候選（原樣、首字母大寫、全大寫）
+        val hasAscii = inputZhuyin.any { it in 'a'..'z' || it in 'A'..'Z' }
+        if (hasAscii) {
+            val lower = inputZhuyin.lowercase()
+            val capitalized = lower.replaceFirstChar { it.uppercase() }
+            val upper = inputZhuyin.uppercase()
+
+            if (seenWords.add(inputZhuyin)) results.add(DictEntry(inputZhuyin, "", 80_000_000))
+            if (seenWords.add(capitalized)) results.add(DictEntry(capitalized, "", 79_000_000))
+            if (seenWords.add(upper)) results.add(DictEntry(upper, "", 78_000_000))
+            if (seenWords.add(lower)) results.add(DictEntry(lower, "", 77_000_000))
+        }
+
+        val cleanInput = inputZhuyin.filter { it !in "ˇˋˊ˙" }
 
         // 1. 個人詞庫 (UserDict) 最高優先權
         val userEntries = userDict.getAllEntries()
@@ -626,6 +690,20 @@ class ZhuyinT9Engine(private val context: Context) {
                 results.add(e)
                 if (results.size >= 60) break
             }
+        }
+
+        // 6. 常用 Emoji 聯想直出 (如 ㄒㄧㄣ -> ❤️, ㄒㄧㄠ -> 😄, ㄎㄨ -> 😭)
+        val emojis = EmojiKaomojiManager.getEmojisForZhuyin(inputZhuyin)
+        for (emoji in emojis) {
+            if (seenWords.add(emoji)) {
+                results.add(DictEntry(emoji, inputZhuyin, 300))
+            }
+        }
+
+        // 7. 若有上下文前詞，給予 Bigram 語境加權重排
+        val activeContext = contextWord ?: currentContextWord
+        if (activeContext != null) {
+            results.sortByDescending { it.weight + getBigramBoost(activeContext, it.word) * 20_000 }
         }
 
         return results

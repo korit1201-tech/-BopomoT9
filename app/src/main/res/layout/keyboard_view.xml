@@ -50,12 +50,26 @@
                     android:paddingEnd="32dp" />
             </HorizontalScrollView>
 
+            <!-- 展開候選字多列格柵按鈕 (▼) -->
+            <Button
+                android:id="@+id/btn_candidate_expand"
+                style="?android:attr/borderlessButtonStyle"
+                android:layout_width="38dp"
+                android:layout_height="match_parent"
+                android:layout_gravity="end|center_vertical"
+                android:background="@drawable/bg_candidate_more"
+                android:text="▼"
+                android:textColor="@color/kb_text_secondary"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
             <!-- 右側更多候選字指示器 (當候選字超過螢幕時提示使用者可向右拉動) -->
             <TextView
                 android:id="@+id/candidate_more_indicator"
                 android:layout_width="28dp"
                 android:layout_height="match_parent"
                 android:layout_gravity="end|center_vertical"
+                android:layout_marginEnd="38dp"
                 android:gravity="center"
                 android:text="›"
                 android:textColor="@color/kb_candidate_text"
@@ -536,52 +550,105 @@
             android:background="@color/kb_bg"
             android:visibility="gone">
 
-            <!-- 頂部 Tab 欄 -->
+            <!-- 頂部 Tab 欄 (可左右橫向捲動的多分頁) -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="36dp"
                 android:orientation="horizontal"
                 android:background="@color/kb_candidate_bg">
 
-                <Button
-                    android:id="@+id/tab_sym_fullwidth"
-                    style="?android:attr/borderlessButtonStyle"
+                <HorizontalScrollView
                     android:layout_width="0dp"
                     android:layout_height="match_parent"
                     android:layout_weight="1"
-                    android:text="全形"
-                    android:textSize="13sp"
-                    android:textColor="@color/kb_text_primary" />
+                    android:scrollbars="none">
 
-                <Button
-                    android:id="@+id/tab_sym_halfwidth"
-                    style="?android:attr/borderlessButtonStyle"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:text="半形"
-                    android:textSize="13sp"
-                    android:textColor="@color/kb_text_primary" />
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="match_parent"
+                        android:orientation="horizontal">
 
-                <Button
-                    android:id="@+id/tab_sym_dpad"
-                    style="?android:attr/borderlessButtonStyle"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1.2"
-                    android:text="方向鍵"
-                    android:textSize="13sp"
-                    android:textColor="@color/kb_text_primary" />
+                        <Button
+                            android:id="@+id/tab_sym_fullwidth"
+                            style="?android:attr/borderlessButtonStyle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="match_parent"
+                            android:minWidth="54dp"
+                            android:text="全形"
+                            android:textSize="13sp"
+                            android:textColor="@color/kb_text_primary" />
 
-                <Button
-                    android:id="@+id/tab_sym_math"
-                    style="?android:attr/borderlessButtonStyle"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:text="符號"
-                    android:textSize="13sp"
-                    android:textColor="@color/kb_text_primary" />
+                        <Button
+                            android:id="@+id/tab_sym_halfwidth"
+                            style="?android:attr/borderlessButtonStyle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="match_parent"
+                            android:minWidth="54dp"
+                            android:text="半形"
+                            android:textSize="13sp"
+                            android:textColor="@color/kb_text_primary" />
+
+                        <Button
+                            android:id="@+id/tab_sym_dpad"
+                            style="?android:attr/borderlessButtonStyle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="match_parent"
+                            android:minWidth="62dp"
+                            android:text="方向鍵"
+                            android:textSize="13sp"
+                            android:textColor="@color/kb_text_primary" />
+
+                        <Button
+                            android:id="@+id/tab_sym_math"
+                            style="?android:attr/borderlessButtonStyle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="match_parent"
+                            android:minWidth="54dp"
+                            android:text="符號"
+                            android:textSize="13sp"
+                            android:textColor="@color/kb_text_primary" />
+
+                        <Button
+                            android:id="@+id/tab_sym_clipboard"
+                            style="?android:attr/borderlessButtonStyle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="match_parent"
+                            android:minWidth="68dp"
+                            android:text="📋剪貼簿"
+                            android:textSize="13sp"
+                            android:textColor="@color/kb_text_primary" />
+
+                        <Button
+                            android:id="@+id/tab_sym_emoji"
+                            style="?android:attr/borderlessButtonStyle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="match_parent"
+                            android:minWidth="64dp"
+                            android:text="😀Emoji"
+                            android:textSize="13sp"
+                            android:textColor="@color/kb_text_primary" />
+
+                        <Button
+                            android:id="@+id/tab_sym_kaomoji"
+                            style="?android:attr/borderlessButtonStyle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="match_parent"
+                            android:minWidth="66dp"
+                            android:text="顏文字"
+                            android:textSize="13sp"
+                            android:textColor="@color/kb_text_primary" />
+
+                        <Button
+                            android:id="@+id/tab_sym_snippet"
+                            style="?android:attr/borderlessButtonStyle"
+                            android:layout_width="wrap_content"
+                            android:layout_height="match_parent"
+                            android:minWidth="66dp"
+                            android:text="常用短語"
+                            android:textSize="13sp"
+                            android:textColor="@color/kb_text_primary" />
+                    </LinearLayout>
+                </HorizontalScrollView>
 
                 <Button
                     android:id="@+id/btn_close_symbol_panel"
@@ -600,6 +667,63 @@
                 android:layout_height="0dp"
                 android:layout_weight="1"
                 android:padding="4dp" />
+        </LinearLayout>
+
+        <!-- 6. 候選字展開多列大面板 (Grid Panel) -->
+        <LinearLayout
+            android:id="@+id/layout_candidate_grid"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/kb_candidate_bg"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <!-- 頂部控制列：標題、提示與收合按鈕 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="36dp"
+                android:background="@color/kb_action_key_bg"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="12dp"
+                android:paddingEnd="4dp">
+
+                <TextView
+                    android:id="@+id/tv_candidate_grid_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="全部候選字"
+                    android:textColor="@color/kb_text_secondary"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/btn_candidate_grid_close"
+                    style="?android:attr/borderlessButtonStyle"
+                    android:layout_width="48dp"
+                    android:layout_height="match_parent"
+                    android:text="▲"
+                    android:textColor="@color/kb_text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <!-- 候選字多列捲動區域 -->
+            <ScrollView
+                android:id="@+id/scroll_candidate_grid"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:fadingEdgeLength="16dp"
+                android:requiresFadingEdge="vertical">
+
+                <LinearLayout
+                    android:id="@+id/container_candidate_grid"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="6dp" />
+            </ScrollView>
         </LinearLayout>
 
     </FrameLayout>

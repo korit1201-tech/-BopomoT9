@@ -97,6 +97,38 @@ class MainActivity : AppCompatActivity() {
         }
 
         setupVibrationSettings()
+        setupThemeSettings()
+    }
+
+    private fun setupThemeSettings() {
+        val spinnerTheme = findViewById<android.widget.Spinner>(R.id.spinner_theme) ?: return
+        val themes = com.bopomofo.t9ime.theme.AppTheme.values()
+        val themeNames = themes.map { it.displayName }
+
+        val adapter = android.widget.ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            themeNames
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        spinnerTheme.adapter = adapter
+
+        val currentTheme = com.bopomofo.t9ime.theme.ThemeManager.getCurrentTheme(this)
+        val selectedIndex = themes.indexOf(currentTheme).coerceAtLeast(0)
+        spinnerTheme.setSelection(selectedIndex)
+
+        spinnerTheme.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                val selectedTheme = themes[position]
+                if (selectedTheme != com.bopomofo.t9ime.theme.ThemeManager.getCurrentTheme(this@MainActivity)) {
+                    com.bopomofo.t9ime.theme.ThemeManager.setTheme(this@MainActivity, selectedTheme)
+                    Toast.makeText(this@MainActivity, "🎨 主題已切換為：${selectedTheme.displayName}", Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
     }
 
     private fun setupVibrationSettings() {

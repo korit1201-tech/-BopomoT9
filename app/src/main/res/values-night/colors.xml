@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色模式 (Dark Theme) 經典配色 -->
+    <color name="kb_bg">#1E1F22</color>
+    <color name="kb_key_bg">#2B2D31</color>
+    <color name="kb_key_pressed">#3F4248</color>
+    <color name="kb_action_key_bg">#232428</color>
+    <color name="kb_text_primary">#F2F3F5</color>
+    <color name="kb_text_secondary">#949BA4</color>
+    <color name="kb_candidate_bg">#1E1F22</color>
+    <color name="kb_candidate_text">#58A6FF</color>
+    <color name="kb_candidate_highlight">#1F385C</color>
+    <color name="kb_accent">#58A6FF</color>
+</resources>
