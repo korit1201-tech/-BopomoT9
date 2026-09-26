@@ -650,14 +650,6 @@
                     </LinearLayout>
                 </HorizontalScrollView>
 
-                <Button
-                    android:id="@+id/btn_settings_symbol_panel"
-                    style="?android:attr/borderlessButtonStyle"
-                    android:layout_width="38dp"
-                    android:layout_height="match_parent"
-                    android:text="⚙"
-                    android:textSize="17sp"
-                    android:textColor="@color/kb_text_secondary" />
 
                 <Button
                     android:id="@+id/btn_close_symbol_panel"
@@ -706,14 +698,6 @@
                     android:textColor="@color/kb_text_secondary"
                     android:textSize="13sp" />
 
-                <Button
-                    android:id="@+id/btn_candidate_grid_settings"
-                    style="?android:attr/borderlessButtonStyle"
-                    android:layout_width="40dp"
-                    android:layout_height="match_parent"
-                    android:text="⚙"
-                    android:textSize="17sp"
-                    android:textColor="@color/kb_text_secondary" />
 
                 <Button
                     android:id="@+id/btn_candidate_grid_close"

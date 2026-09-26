@@ -421,10 +421,6 @@ class ZhuyinInputMethodService : InputMethodService() {
         btnCandidateGridClose?.setOnClickListener {
             closeCandidateGrid()
         }
-        root.findViewById<Button>(R.id.btn_candidate_grid_settings)?.setOnClickListener {
-            triggerHapticFeedback(HapticType.MODE_SWITCH)
-            openSettings()
-        }
 
         setup12KeyLayout(root)
         setupZhuyinFullLayout(root)
@@ -1045,8 +1041,6 @@ class ZhuyinInputMethodService : InputMethodService() {
         tabClip?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.CLIPBOARD) }
         tabEmoji?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.EMOJI) }
         tabKaomoji?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.KAOMOJI) }
-        val btnSettings = root.findViewById<Button>(R.id.btn_settings_symbol_panel)
-        btnSettings?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); openSettings() }
         btnClose?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); hideSymbolPanel() }
 
         btnSymbolDrawer.setOnClickListener {
@@ -1056,11 +1050,6 @@ class ZhuyinInputMethodService : InputMethodService() {
             } else {
                 showSymbolPanel()
             }
-        }
-        btnSymbolDrawer.setOnLongClickListener {
-            triggerHapticFeedback(HapticType.MODE_SWITCH)
-            openSettings()
-            true
         }
     }
 
@@ -2613,6 +2602,32 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
 
         updateCandidateBar(candidateItems)
+
+        // 同步彈出懸浮同音字選單，確保在任何 App 輸入框長按時能直觀看到選單
+        try {
+            val anchor = candidateContainer ?: rootView
+            if (anchor != null) {
+                val popup = android.widget.PopupMenu(this, anchor)
+                popup.menu.add(0, 0, 0, "✔ 保持原字【$targetChar】")
+                for ((index, homo) in homophones.withIndex()) {
+                    if (homo.word != targetChar.toString()) {
+                        val displayHomo = if (isSimplified) ChineseConverter.toSimplified(homo.word) else homo.word
+                        popup.menu.add(0, index + 1, index + 1, displayHomo)
+                    }
+                }
+                popup.setOnMenuItemClickListener { menuItem ->
+                    triggerHapticFeedback(HapticType.COMMIT)
+                    if (menuItem.itemId > 0) {
+                        val chosen = homophones[menuItem.itemId - 1]
+                        applyHomophoneReplacement(chosen)
+                    } else {
+                        exitHomophoneSelectionMode()
+                    }
+                    true
+                }
+                popup.show()
+            }
+        } catch (_: Exception) {}
     }
 
     private fun applyHomophoneReplacement(entry: DictEntry) {

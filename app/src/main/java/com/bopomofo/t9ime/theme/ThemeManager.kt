@@ -14,8 +14,11 @@ enum class AppTheme(val id: String, val displayName: String) {
     FOLLOW_SYSTEM("system", "跟隨系統"),
     LIGHT("light", "簡潔純白"),
     DARK("dark", "黑曜極致"),
-    OCEAN("ocean", "蔚藍海洋"),
-    FOREST("forest", "台灣森林綠")
+    SKY("sky", "晴空蔚藍"),
+    SAKURA("sakura", "櫻花粉黛"),
+    SUNSET("sunset", "日落暖橙"),
+    MINT("mint", "薄荷青翠"),
+    PARCHMENT("parchment", "復古羊皮")
 }
 
 data class ThemeColors(
@@ -51,8 +54,6 @@ object ThemeManager {
         R.id.btn_sym_4,
         R.id.btn_sym_5,
         R.id.btn_close_symbol_panel,
-        R.id.btn_settings_symbol_panel,
-        R.id.btn_candidate_grid_settings,
         R.id.btn_handwriting_clear
     )
 
@@ -77,52 +78,88 @@ object ThemeManager {
                 else getThemeColors(context, AppTheme.LIGHT)
             }
             AppTheme.LIGHT -> ThemeColors(
-                bg = Color.parseColor("#ECEEF1"),
+                bg = Color.parseColor("#E5E7EB"),
                 keyBg = Color.parseColor("#FFFFFF"),
-                keyPressed = Color.parseColor("#DCE0E5"),
-                actionKeyBg = Color.parseColor("#DDE1E6"),
-                stroke = Color.parseColor("#CFD4D9"),
-                textPrimary = Color.parseColor("#1F2328"),
-                textSecondary = Color.parseColor("#656D76"),
+                keyPressed = Color.parseColor("#D1D5DB"),
+                actionKeyBg = Color.parseColor("#D1D5DB"),
+                stroke = Color.parseColor("#CBD5E1"),
+                textPrimary = Color.parseColor("#111827"),
+                textSecondary = Color.parseColor("#4B5563"),
                 candidateBg = Color.parseColor("#FFFFFF"),
-                candidateText = Color.parseColor("#0969DA"),
-                accent = Color.parseColor("#0969DA")
+                candidateText = Color.parseColor("#2563EB"),
+                accent = Color.parseColor("#2563EB")
             )
             AppTheme.DARK -> ThemeColors(
-                bg = Color.parseColor("#151718"),
-                keyBg = Color.parseColor("#26292B"),
-                keyPressed = Color.parseColor("#3B3F43"),
-                actionKeyBg = Color.parseColor("#1E2022"),
-                stroke = Color.parseColor("#363A3E"),
-                textPrimary = Color.parseColor("#F0F2F5"),
-                textSecondary = Color.parseColor("#8B949E"),
-                candidateBg = Color.parseColor("#1B1D1F"),
-                candidateText = Color.parseColor("#58A6FF"),
-                accent = Color.parseColor("#58A6FF")
+                bg = Color.parseColor("#0F0F11"),
+                keyBg = Color.parseColor("#212124"),
+                keyPressed = Color.parseColor("#38383D"),
+                actionKeyBg = Color.parseColor("#18181B"),
+                stroke = Color.parseColor("#2E2E33"),
+                textPrimary = Color.parseColor("#F9FAFB"),
+                textSecondary = Color.parseColor("#9CA3AF"),
+                candidateBg = Color.parseColor("#18181B"),
+                candidateText = Color.parseColor("#60A5FA"),
+                accent = Color.parseColor("#60A5FA")
             )
-            AppTheme.OCEAN -> ThemeColors(
-                bg = Color.parseColor("#0A1420"),
-                keyBg = Color.parseColor("#16283B"),
-                keyPressed = Color.parseColor("#264566"),
-                actionKeyBg = Color.parseColor("#0F1E2E"),
-                stroke = Color.parseColor("#243D59"),
-                textPrimary = Color.parseColor("#EBF3FA"),
-                textSecondary = Color.parseColor("#8BAAC9"),
-                candidateBg = Color.parseColor("#0E1B2B"),
-                candidateText = Color.parseColor("#38BDF8"),
-                accent = Color.parseColor("#38BDF8")
+            AppTheme.SKY -> ThemeColors(
+                bg = Color.parseColor("#BAE6FD"),
+                keyBg = Color.parseColor("#FFFFFF"),
+                keyPressed = Color.parseColor("#E0F2FE"),
+                actionKeyBg = Color.parseColor("#7DD3FC"),
+                stroke = Color.parseColor("#38BDF8"),
+                textPrimary = Color.parseColor("#0369A1"),
+                textSecondary = Color.parseColor("#0284C7"),
+                candidateBg = Color.parseColor("#E0F2FE"),
+                candidateText = Color.parseColor("#0284C7"),
+                accent = Color.parseColor("#0284C7")
             )
-            AppTheme.FOREST -> ThemeColors(
-                bg = Color.parseColor("#0F1B14"),
-                keyBg = Color.parseColor("#1E3326"),
-                keyPressed = Color.parseColor("#2E4F3B"),
-                actionKeyBg = Color.parseColor("#15241B"),
-                stroke = Color.parseColor("#2D4A38"),
-                textPrimary = Color.parseColor("#E8F5E9"),
-                textSecondary = Color.parseColor("#8FB89B"),
-                candidateBg = Color.parseColor("#14241B"),
-                candidateText = Color.parseColor("#4ADE80"),
-                accent = Color.parseColor("#4ADE80")
+            AppTheme.SAKURA -> ThemeColors(
+                bg = Color.parseColor("#FCE7F3"),
+                keyBg = Color.parseColor("#FFFFFF"),
+                keyPressed = Color.parseColor("#FDF2F8"),
+                actionKeyBg = Color.parseColor("#FBCFE8"),
+                stroke = Color.parseColor("#F472B6"),
+                textPrimary = Color.parseColor("#9D174D"),
+                textSecondary = Color.parseColor("#BE185D"),
+                candidateBg = Color.parseColor("#FDF2F8"),
+                candidateText = Color.parseColor("#DB2777"),
+                accent = Color.parseColor("#DB2777")
+            )
+            AppTheme.SUNSET -> ThemeColors(
+                bg = Color.parseColor("#FFEDD5"),
+                keyBg = Color.parseColor("#FFFFFF"),
+                keyPressed = Color.parseColor("#FFF7ED"),
+                actionKeyBg = Color.parseColor("#FED7AA"),
+                stroke = Color.parseColor("#FB923C"),
+                textPrimary = Color.parseColor("#9A3412"),
+                textSecondary = Color.parseColor("#C2410C"),
+                candidateBg = Color.parseColor("#FFF7ED"),
+                candidateText = Color.parseColor("#EA580C"),
+                accent = Color.parseColor("#EA580C")
+            )
+            AppTheme.MINT -> ThemeColors(
+                bg = Color.parseColor("#D1FAE5"),
+                keyBg = Color.parseColor("#FFFFFF"),
+                keyPressed = Color.parseColor("#ECFDF5"),
+                actionKeyBg = Color.parseColor("#A7F3D0"),
+                stroke = Color.parseColor("#34D399"),
+                textPrimary = Color.parseColor("#065F46"),
+                textSecondary = Color.parseColor("#047857"),
+                candidateBg = Color.parseColor("#ECFDF5"),
+                candidateText = Color.parseColor("#059669"),
+                accent = Color.parseColor("#059669")
+            )
+            AppTheme.PARCHMENT -> ThemeColors(
+                bg = Color.parseColor("#EADBC8"),
+                keyBg = Color.parseColor("#FAF6F0"),
+                keyPressed = Color.parseColor("#F3EBE1"),
+                actionKeyBg = Color.parseColor("#DAC0A3"),
+                stroke = Color.parseColor("#B59A7A"),
+                textPrimary = Color.parseColor("#43281C"),
+                textSecondary = Color.parseColor("#5A3E2B"),
+                candidateBg = Color.parseColor("#FAF6F0"),
+                candidateText = Color.parseColor("#7F4F24"),
+                accent = Color.parseColor("#7F4F24")
             )
         }
     }
