@@ -142,6 +142,7 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     private lateinit var btnMode123: Button
     private lateinit var btnLangToggle: Button
+    private lateinit var btnFullEnter: Button
     private lateinit var btnSpaceSwipe: SwipeKeyButton
     private lateinit var btnQwertyToggle: SwipeKeyButton
     private lateinit var btnSymbolDrawer: Button
@@ -425,6 +426,11 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         btnMode123 = root.findViewById(R.id.btn_mode_123)
         btnLangToggle = root.findViewById(R.id.btn_lang_toggle)
+        btnFullEnter = root.findViewById(R.id.btn_full_enter)
+        btnFullEnter.setOnClickListener {
+            triggerHapticFeedback()
+            performEnterAction()
+        }
         btnSpaceSwipe = root.findViewById(R.id.btn_space_swipe)
         btnQwertyToggle = root.findViewById(R.id.btn_qwerty_toggle)
         layoutZhuyinFull = root.findViewById(R.id.layout_zhuyin_full)
@@ -1734,7 +1740,13 @@ class ZhuyinInputMethodService : InputMethodService() {
                     updateKeyboardModeUI()
                 }
                 KeyboardMode.ZHUYIN_FULL -> {
-                    performEnterAction()
+                    lastChineseMode = KeyboardMode.ZHUYIN
+                    currentMode = KeyboardMode.ZHUYIN
+                    engine.clear()
+                    fullZhuyinBuffer.clear()
+                    currentInputConnection?.setComposingText("", 1)
+                    refreshUI(emptyList())
+                    updateKeyboardModeUI()
                 }
                 KeyboardMode.ENGLISH_QWERTY -> {
                     currentInputConnection?.commitText("'", 1)
@@ -1757,17 +1769,6 @@ class ZhuyinInputMethodService : InputMethodService() {
             if (currentMode == KeyboardMode.ENGLISH_QWERTY) {
                 triggerHapticFeedback(HapticType.MODE_SWITCH)
                 showEnglishAbbrevPopup(btnLangToggle)
-                return@setOnLongClickListener true
-            }
-            if (currentMode == KeyboardMode.ZHUYIN_FULL) {
-                triggerHapticFeedback(HapticType.MODE_SWITCH)
-                lastChineseMode = KeyboardMode.ZHUYIN
-                currentMode = KeyboardMode.ZHUYIN
-                engine.clear()
-                fullZhuyinBuffer.clear()
-                currentInputConnection?.setComposingText("", 1)
-                refreshUI(emptyList())
-                updateKeyboardModeUI()
                 return@setOnLongClickListener true
             }
             triggerHapticFeedback(HapticType.MODE_SWITCH)
@@ -2013,6 +2014,10 @@ class ZhuyinInputMethodService : InputMethodService() {
         btnSpaceSwipe.includeFontPadding = false
         btnSpaceSwipe.setLineSpacing(0f, 0.9f)
 
+        if (::btnFullEnter.isInitialized) {
+            btnFullEnter.visibility = if (currentMode == KeyboardMode.ZHUYIN_FULL) View.VISIBLE else View.GONE
+        }
+
         when (currentMode) {
             KeyboardMode.ZHUYIN -> {
                 layout12Key.visibility = View.VISIBLE
@@ -2041,7 +2046,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
 
                 btnMode123.text = formatMode123Label("123")
-                btnLangToggle.text = formatFullZhuyinEnterLabel()
+                btnLangToggle.text = if (isSimplified) "9鍵·簡" else "9鍵·繁"
                 btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "英文", "手寫")
                 btnQwertyToggle.visibility = View.GONE
                 if (::btnComma.isInitialized) btnComma.text = if (isTraditionalMode()) "，" else ","
