@@ -1731,7 +1731,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                     updateKeyboardModeUI()
                 }
                 KeyboardMode.ENGLISH_QWERTY -> {
-                    showEnglishAbbrevPopup(btnLangToggle)
+                    currentInputConnection?.commitText("'", 1)
                 }
                 KeyboardMode.NUMBER_SYM -> {
                     currentMode = KeyboardMode.ZHUYIN
@@ -1749,8 +1749,8 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         btnLangToggle.setOnLongClickListener {
             if (currentMode == KeyboardMode.ENGLISH_QWERTY) {
-                triggerHapticFeedback()
-                currentInputConnection?.commitText(".com", 1)
+                triggerHapticFeedback(HapticType.MODE_SWITCH)
+                showEnglishAbbrevPopup(btnLangToggle)
                 return@setOnLongClickListener true
             }
             triggerHapticFeedback(HapticType.MODE_SWITCH)
@@ -1915,19 +1915,19 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun formatAbbrevLabel(): CharSequence {
-        val line1 = ".com"
-        val line2 = "縮寫"
+        val line1 = "'"
+        val line2 = "常用縮寫"
         val fullText = "$line1\n$line2"
         val spannable = SpannableString(fullText)
         val split = line1.length
         val primaryColor = ContextCompat.getColor(this, R.color.kb_text_primary)
         val secondaryColor = ContextCompat.getColor(this, R.color.kb_text_secondary)
 
-        spannable.setSpan(RelativeSizeSpan(0.85f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(RelativeSizeSpan(1.20f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(StyleSpan(Typeface.BOLD), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(ForegroundColorSpan(primaryColor), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
 
-        spannable.setSpan(RelativeSizeSpan(0.55f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(RelativeSizeSpan(0.52f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(ForegroundColorSpan(secondaryColor), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         return spannable
     }
