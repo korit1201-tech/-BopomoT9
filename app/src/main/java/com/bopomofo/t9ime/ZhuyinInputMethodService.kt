@@ -2021,7 +2021,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
 
                 btnMode123.text = formatMode123Label("123")
-                btnLangToggle.text = if (isSimplified) "9鍵·簡" else "9鍵·繁"
+                btnLangToggle.text = if (isSimplified) "全鍵·簡" else "全鍵·繁"
                 btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "英文", "手寫")
                 btnQwertyToggle.visibility = View.GONE
                 if (::btnComma.isInitialized) btnComma.text = if (isTraditionalMode()) "，" else ","
