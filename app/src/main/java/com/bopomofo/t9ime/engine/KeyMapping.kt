@@ -40,7 +40,7 @@ object KeyMapping {
     private val ZERO_RHYME_CONSONANTS = setOf('ㄓ', 'ㄔ', 'ㄕ', 'ㄖ', 'ㄗ', 'ㄘ', 'ㄙ')
 
     /** 所有聲母（用於判斷下一個字元是否為新音節的開頭） */
-    private val ALL_INITIALS = setOf(
+    val ALL_INITIALS = setOf(
         'ㄅ', 'ㄆ', 'ㄇ', 'ㄈ', 'ㄉ', 'ㄊ', 'ㄋ', 'ㄌ',
         'ㄍ', 'ㄎ', 'ㄏ', 'ㄐ', 'ㄑ', 'ㄒ',
         'ㄓ', 'ㄔ', 'ㄕ', 'ㄖ', 'ㄗ', 'ㄘ', 'ㄙ'

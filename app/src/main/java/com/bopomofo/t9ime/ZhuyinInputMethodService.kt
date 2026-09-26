@@ -218,6 +218,14 @@ class ZhuyinInputMethodService : InputMethodService() {
         googleRecognizer?.close()
     }
 
+    override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
+        super.onStartInputView(info, restarting)
+        rootView?.let { root ->
+            ThemeManager.applyTheme(root, ThemeManager.getCurrentTheme(this))
+            applyOneHandedMode()
+        }
+    }
+
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         rootView?.let { root ->
@@ -454,8 +462,8 @@ class ZhuyinInputMethodService : InputMethodService() {
                             val (_, candidates) = engine.cycleTone()
                             refreshUI(candidates)
                         } else {
-                            // 前綴詞保護與智慧自動確認：
-                            // 若當前已有完整多字詞候選（長度 >= 2，如「目前」、「今天」），
+                            // 新酷音詞邊界自動提交 (Word Boundary Commit)：
+                            // 若當前已有完整多字詞候選（長度 >= 2，如「概念」、「目前」、「今天」），
                             // 且當前按鍵序列加上新按鍵 keyNum 在字典中已無法組成更長詞彙，
                             // 表示使用者按下此鍵是在輸入下一個字，立即自動確認提交前綴詞！
                             val topCandidate = engine.getCandidates().firstOrNull()
@@ -469,7 +477,6 @@ class ZhuyinInputMethodService : InputMethodService() {
                             }
 
                             engine.pressKey(keyNum)
-                            checkAndCommitConfirmedPrefix()
                             refreshUI(engine.getCandidates())
                         }
                     }
@@ -985,15 +992,16 @@ class ZhuyinInputMethodService : InputMethodService() {
             homophoneCharIndex = -1
         }
 
-        // 前綴詞保護與智慧自動確認：
-        // 若當前已有完整多字詞候選（如簡拼或全拼成詞「目前」、「今天」），
-        // 且加上新按鍵 ch 後無法匹配任何候選詞，表示使用者正在輸入下一個字，立即自動確認上屏前綴詞！
+        // 新酷音詞邊界智慧自動確認 (Word Boundary Auto-Commit)：
+        // 若當前已有完整多字詞候選（如「概念」、「目前」、「今天」），
+        // 且加上新按鍵 ch 無法匹配候選詞，或新按鍵是新聲母且無法延伸成更長詞，立即自動確認上屏前綴詞！
         if (fullZhuyinBuffer.isNotEmpty()) {
             val curCands = engine.searchFullZhuyin(fullZhuyinBuffer.toString(), lastCommittedWord)
             val topEntry = curCands.firstOrNull()
             if (topEntry != null && topEntry.word.length >= 2) {
                 val nextTest = engine.searchFullZhuyin(fullZhuyinBuffer.toString() + ch, lastCommittedWord)
-                if (nextTest.isEmpty()) {
+                val isNewWordStart = nextTest.isEmpty() || (nextTest.none { it.word.startsWith(topEntry.word) } && com.bopomofo.t9ime.engine.KeyMapping.ALL_INITIALS.contains(ch))
+                if (isNewWordStart) {
                     commitProcessedWordWithUserDict(topEntry.word, topEntry.zhuyin)
                 }
             }
@@ -2263,14 +2271,6 @@ class ZhuyinInputMethodService : InputMethodService() {
         currentInputConnection?.commitText(finalText, 1)
     }
 
-    private fun checkAndCommitConfirmedPrefix() {
-        if (customComposingWord != null || isHomophoneSelectionMode) return
-        val confirmed = engine.pollConfirmedPrefix()
-        if (confirmed != null) {
-            commitProcessedText(confirmed.first)
-            lastCommittedWord = confirmed.first
-        }
-    }
 
     private fun refreshUI(candidates: List<DictEntry>) {
         updateComposingPreview()
@@ -2397,6 +2397,12 @@ class ZhuyinInputMethodService : InputMethodService() {
         tvCandidateGridTitle?.text = "全部候選字 (共 ${count} 個)"
         containerCandidateGrid?.removeAllViews()
 
+        val currentTheme = ThemeManager.getCurrentTheme(this)
+        val themeColors = ThemeManager.getThemeColors(this, currentTheme)
+        layoutCandidateGrid?.setBackgroundColor(themeColors.bg)
+        tvCandidateGridTitle?.setTextColor(themeColors.textSecondary)
+        btnCandidateGridClose?.setTextColor(themeColors.accent)
+
         val itemsPerRow = 4
         val rows = currentCandidateList.chunked(itemsPerRow)
 
@@ -2425,8 +2431,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                     val displayWord = if (isSimplified) ChineseConverter.toSimplified(entry.word) else entry.word
                     text = displayWord
                     textSize = 17f
-                    setBackgroundResource(R.drawable.bg_key)
-                    setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
+                    setTextColor(themeColors.textPrimary)
                     setOnClickListener {
                         triggerHapticFeedback(HapticType.COMMIT)
                         closeCandidateGrid()
@@ -2521,10 +2526,12 @@ class ZhuyinInputMethodService : InputMethodService() {
                 }
             }
 
+            val currentTheme = ThemeManager.getCurrentTheme(this)
+            val themeColors = ThemeManager.getThemeColors(this, currentTheme)
             tv.text = displayWord
             tv.setTextColor(
-                if (i == 0) ContextCompat.getColor(this, R.color.kb_candidate_text)
-                else ContextCompat.getColor(this, R.color.kb_text_primary)
+                if (i == 0) themeColors.candidateText
+                else themeColors.textPrimary
             )
             tv.setOnClickListener {
                 triggerHapticFeedback(HapticType.COMMIT)
@@ -2826,17 +2833,30 @@ class ZhuyinInputMethodService : InputMethodService() {
             // E. 大千注音按鍵映射輸入
             val zhuyinChar = DAQIAN_KEY_MAP[keyCode]
             if (zhuyinChar != null) {
-                if (zhuyinChar in listOf('ˇ', 'ˋ', 'ˊ', '˙')) {
-                    val (_, cands) = engine.setTone(zhuyinChar)
-                    refreshUI(cands)
+                if (currentMode == KeyboardMode.ZHUYIN_FULL) {
+                    handleZhuyinFullKey(zhuyinChar)
                     return true
                 } else {
-                    val keyId = com.bopomofo.t9ime.engine.KeyMapping.getKeyId(zhuyinChar)
-                    if (keyId != null) {
-                        engine.pressKey(keyId)
-                        checkAndCommitConfirmedPrefix()
-                        refreshUI(engine.getCandidates())
+                    if (zhuyinChar in listOf('ˇ', 'ˋ', 'ˊ', '˙')) {
+                        val (_, cands) = engine.setTone(zhuyinChar)
+                        refreshUI(cands)
                         return true
+                    } else {
+                        val keyId = com.bopomofo.t9ime.engine.KeyMapping.getKeyId(zhuyinChar)
+                        if (keyId != null) {
+                            val topCandidate = engine.getCandidates().firstOrNull()
+                            val curKeys = engine.getCurrentKeys()
+                            if (topCandidate != null && topCandidate.word.length >= 2 && curKeys.isNotEmpty()) {
+                                val testKeys = curKeys + keyId
+                                val canExtendLongerWord = engine.hasPrefixOrExact(testKeys)
+                                if (!canExtendLongerWord) {
+                                    commitProcessedWordWithUserDict(topCandidate.word, topCandidate.zhuyin)
+                                }
+                            }
+                            engine.pressKey(keyId)
+                            refreshUI(engine.getCandidates())
+                            return true
+                        }
                     }
                 }
             }

@@ -410,19 +410,7 @@ class ZhuyinT9Engine(private val context: Context) {
             )
             .map { it.first }
 
-        // DP 最佳長句分詞（一口氣輸入較長句子 >= 4 鍵時）
-        val segmentedSentence = if (currentKeys.size >= 4) {
-            findBestSentence(currentKeys)
-        } else null
-
-        val candidateList = mutableListOf<DictEntry>()
-        if (segmentedSentence != null && rankedList.none { it.word == segmentedSentence.word }) {
-            // 若為長句且 DP 找到了合理切分，將 DP 最佳長句放在最前
-            candidateList.add(segmentedSentence)
-            candidateList.addAll(rankedList.filter { it.word != segmentedSentence.word })
-        } else {
-            candidateList.addAll(rankedList)
-        }
+        val candidateList = ArrayList(rankedList)
 
         previousTopWord = candidateList.firstOrNull()?.word
 
@@ -730,10 +718,13 @@ class ZhuyinT9Engine(private val context: Context) {
             }
         }
 
-        // 6. 依據詞長偏好模型進行候選詞整體重排（2字詞 > 3字詞 > 4字詞 > 單字）
+        // 6. 依據新酷音詞長偏好模型與完全匹配加成進行候選詞整體重排（2字詞 > 3字詞 > 4字詞 > 單字）
         results.sortWith(
             compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
-                .thenByDescending { getEffectiveWeight(it, cleanInput.length, isExact = false) }
+                .thenByDescending {
+                    val isExact = it.zhuyin.filter { c -> c !in "ˇˋˊ˙" } == cleanInput
+                    getEffectiveWeight(it, cleanInput.length, isExact = isExact)
+                }
         )
 
         return results
