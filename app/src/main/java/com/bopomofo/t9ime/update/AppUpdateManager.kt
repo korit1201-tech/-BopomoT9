@@ -184,7 +184,7 @@ object AppUpdateManager {
         }
 
         val request = DownloadManager.Request(Uri.parse(info.apkUrl)).apply {
-            setTitle("安卓注音九宮格輸入法 更新下載中...")
+            setTitle("All's good注音九宮格輸入法 更新下載中...")
             setDescription("版本：${info.tagName}")
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             setDestinationUri(Uri.fromFile(apkFile))

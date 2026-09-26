@@ -1731,12 +1731,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                     updateKeyboardModeUI()
                 }
                 KeyboardMode.ENGLISH_QWERTY -> {
-                    currentMode = lastChineseMode
-                    engine.clear()
-                    fullZhuyinBuffer.clear()
-                    currentInputConnection?.setComposingText("", 1)
-                    refreshUI(emptyList())
-                    updateKeyboardModeUI()
+                    showEnglishAbbrevPopup(btnLangToggle)
                 }
                 KeyboardMode.NUMBER_SYM -> {
                     currentMode = KeyboardMode.ZHUYIN
@@ -1753,6 +1748,11 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
 
         btnLangToggle.setOnLongClickListener {
+            if (currentMode == KeyboardMode.ENGLISH_QWERTY) {
+                triggerHapticFeedback()
+                currentInputConnection?.commitText(".com", 1)
+                return@setOnLongClickListener true
+            }
             triggerHapticFeedback(HapticType.MODE_SWITCH)
             isSimplified = !isSimplified
             val modeName = if (isSimplified) "簡體中文" else "繁體中文"
@@ -1914,6 +1914,53 @@ class ZhuyinInputMethodService : InputMethodService() {
         return spannable
     }
 
+    private fun formatAbbrevLabel(): CharSequence {
+        val line1 = ".com"
+        val line2 = "縮寫"
+        val fullText = "$line1\n$line2"
+        val spannable = SpannableString(fullText)
+        val split = line1.length
+        val primaryColor = ContextCompat.getColor(this, R.color.kb_text_primary)
+        val secondaryColor = ContextCompat.getColor(this, R.color.kb_text_secondary)
+
+        spannable.setSpan(RelativeSizeSpan(0.85f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(StyleSpan(Typeface.BOLD), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(primaryColor), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+        spannable.setSpan(RelativeSizeSpan(0.55f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(secondaryColor), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return spannable
+    }
+
+    /**
+     * 英文鍵盤右下角縮寫鍵彈出選單
+     */
+    private fun showEnglishAbbrevPopup(anchor: View) {
+        val abbrevs = listOf(
+            ".com", ".tw", "@gmail.com", ".org", ".net", ".io",
+            "e.g.", "i.e.", "etc.", "asap", "btw", "fyi", "thx", "pls"
+        )
+        val popup = android.widget.PopupMenu(this, anchor)
+        for ((index, item) in abbrevs.withIndex()) {
+            popup.menu.add(0, index, index, item)
+        }
+        val snippetMenuId = 1000
+        popup.menu.add(0, snippetMenuId, 99, "📋 開啟常用短語庫...")
+
+        popup.setOnMenuItemClickListener { menuItem ->
+            triggerHapticFeedback()
+            if (menuItem.itemId == snippetMenuId) {
+                showSymbolPanel()
+                switchSymbolTab(SymbolTab.SNIPPET)
+            } else {
+                val text = menuItem.title.toString()
+                currentInputConnection?.commitText(text, 1)
+            }
+            true
+        }
+        popup.show()
+    }
+
     private fun updateKeyboardModeUI() {
         if (::layoutSymbolPanel.isInitialized) layoutSymbolPanel.visibility = View.GONE
         if (::btnSymbolDrawer.isInitialized) btnSymbolDrawer.text = "✛"
@@ -1987,7 +2034,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
 
                 btnMode123.text = formatMode123Label("123")
-                btnLangToggle.text = if (isSimplified) "中文·簡" else "中文"
+                btnLangToggle.text = formatAbbrevLabel()
                 btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("EN", "手寫", "中文")
                 btnQwertyToggle.visibility = View.GONE
 

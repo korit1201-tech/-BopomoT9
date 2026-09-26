@@ -179,7 +179,7 @@ class UserDictionaryManager private constructor(private val context: Context) {
      */
     fun exportToStream(outputStream: OutputStream) {
         val writer = BufferedWriter(OutputStreamWriter(outputStream, Charsets.UTF_8))
-        writer.write("# 安卓注音九宮格輸入法 - 個人詞庫備份檔\n")
+        writer.write("# All's good注音九宮格輸入法 - 個人詞庫備份檔\n")
         writer.write("# 格式：詞彙\t注音\t使用次數\n")
 
         val entries = getAllEntries()
