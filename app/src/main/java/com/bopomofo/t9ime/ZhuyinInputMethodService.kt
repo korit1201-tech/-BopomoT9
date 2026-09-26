@@ -958,11 +958,10 @@ class ZhuyinInputMethodService : InputMethodService() {
             row3.addView(createZhuyinFullKey(ch, 1f))
         }
 
-        row4.addView(createZhuyinFullClearKey(1.1f))
+        // 第 4 排回歸純注音 11 鍵，按鍵寬度放大約 30%，徹底解決擁擠問題
         for (ch in r4) {
             row4.addView(createZhuyinFullKey(ch, 1f))
         }
-        row4.addView(createZhuyinFullEnterKey(1.1f))
     }
 
     private fun createZhuyinFullKey(ch: Char, weight: Float, longClickChar: String? = null): Button {
@@ -1079,6 +1078,11 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun updateComposingPreviewFull() {
+        if (fullZhuyinBuffer.isEmpty()) {
+            currentInputConnection?.setComposingText("", 1)
+            currentInputConnection?.finishComposingText()
+            return
+        }
         val preview = fullZhuyinBuffer.toString()
         val finalPreview = if (isSimplified) ChineseConverter.toSimplified(preview) else preview
         currentInputConnection?.setComposingText(finalPreview, 1)
@@ -1723,13 +1727,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                     updateKeyboardModeUI()
                 }
                 KeyboardMode.ZHUYIN_FULL -> {
-                    lastChineseMode = KeyboardMode.ZHUYIN
-                    currentMode = KeyboardMode.ZHUYIN
-                    engine.clear()
-                    fullZhuyinBuffer.clear()
-                    currentInputConnection?.setComposingText("", 1)
-                    refreshUI(emptyList())
-                    updateKeyboardModeUI()
+                    performEnterAction()
                 }
                 KeyboardMode.ENGLISH_QWERTY -> {
                     currentInputConnection?.commitText("'", 1)
@@ -1752,6 +1750,17 @@ class ZhuyinInputMethodService : InputMethodService() {
             if (currentMode == KeyboardMode.ENGLISH_QWERTY) {
                 triggerHapticFeedback(HapticType.MODE_SWITCH)
                 showEnglishAbbrevPopup(btnLangToggle)
+                return@setOnLongClickListener true
+            }
+            if (currentMode == KeyboardMode.ZHUYIN_FULL) {
+                triggerHapticFeedback(HapticType.MODE_SWITCH)
+                lastChineseMode = KeyboardMode.ZHUYIN
+                currentMode = KeyboardMode.ZHUYIN
+                engine.clear()
+                fullZhuyinBuffer.clear()
+                currentInputConnection?.setComposingText("", 1)
+                refreshUI(emptyList())
+                updateKeyboardModeUI()
                 return@setOnLongClickListener true
             }
             triggerHapticFeedback(HapticType.MODE_SWITCH)
@@ -1915,6 +1924,24 @@ class ZhuyinInputMethodService : InputMethodService() {
         return spannable
     }
 
+    private fun formatFullZhuyinEnterLabel(): CharSequence {
+        val line1 = "↵"
+        val line2 = if (isSimplified) "9鍵·簡" else "9鍵·繁"
+        val fullText = "$line1\n$line2"
+        val spannable = SpannableString(fullText)
+        val split = line1.length
+        val primaryColor = ContextCompat.getColor(this, R.color.kb_text_primary)
+        val secondaryColor = ContextCompat.getColor(this, R.color.kb_text_secondary)
+
+        spannable.setSpan(RelativeSizeSpan(1.30f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(StyleSpan(Typeface.BOLD), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(primaryColor), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+        spannable.setSpan(RelativeSizeSpan(0.55f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(ForegroundColorSpan(secondaryColor), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return spannable
+    }
+
     private fun formatAbbrevLabel(): CharSequence {
         val line1 = "'"
         val line2 = "常用縮寫"
@@ -2007,7 +2034,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
 
                 btnMode123.text = formatMode123Label("123")
-                btnLangToggle.text = if (isSimplified) "全鍵·簡" else "全鍵·繁"
+                btnLangToggle.text = formatFullZhuyinEnterLabel()
                 btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "英文", "手寫")
                 btnQwertyToggle.visibility = View.GONE
                 if (::btnComma.isInitialized) btnComma.text = if (isTraditionalMode()) "，" else ","
@@ -2412,6 +2439,10 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun updateComposingPreview() {
+        if (currentMode == KeyboardMode.ZHUYIN_FULL) {
+            updateComposingPreviewFull()
+            return
+        }
         if (!engine.hasComposing()) {
             currentInputConnection?.setComposingText("", 1)
             currentInputConnection?.finishComposingText()
@@ -2623,17 +2654,24 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun updateCandidateBar(candidates: List<DictEntry>) {
-        currentCandidateList = candidates
-        btnCandidateExpand?.visibility = if (candidates.isNotEmpty()) View.VISIBLE else View.GONE
+        val effectiveCandidates = if (currentMode == KeyboardMode.ZHUYIN_FULL && fullZhuyinBuffer.isNotEmpty() && !isHomophoneSelectionMode) {
+            val zhuyinEntry = DictEntry("【$fullZhuyinBuffer】", fullZhuyinBuffer.toString(), 999_999_999)
+            listOf(zhuyinEntry) + candidates
+        } else {
+            candidates
+        }
+        currentCandidateList = effectiveCandidates
+        btnCandidateExpand?.visibility = if (effectiveCandidates.isNotEmpty()) View.VISIBLE else View.GONE
         if (isCandidateGridOpen) {
             populateCandidateGrid()
         }
 
-        val displayCandidates = candidates.take(MAX_CANDIDATES_DISPLAY)
+        val displayCandidates = effectiveCandidates.take(MAX_CANDIDATES_DISPLAY)
         val count = displayCandidates.size
 
         for (i in 0 until count) {
             val entry = displayCandidates[i]
+            val isZhuyinHeader = currentMode == KeyboardMode.ZHUYIN_FULL && entry.word.startsWith("【") && entry.word.endsWith("】")
             val displayWord = if (isSimplified) ChineseConverter.toSimplified(entry.word) else entry.word
 
             val tv = if (i < candidateTextViewPool.size) {
@@ -2660,14 +2698,30 @@ class ZhuyinInputMethodService : InputMethodService() {
             val currentTheme = ThemeManager.getCurrentTheme(this)
             val themeColors = ThemeManager.getThemeColors(this, currentTheme)
             tv.text = displayWord
-            tv.setTextColor(
-                if (i == 0) themeColors.candidateText
-                else themeColors.textPrimary
-            )
+            if (isZhuyinHeader) {
+                tv.setTextColor(themeColors.accent)
+                tv.setTypeface(null, Typeface.BOLD)
+                tv.setBackgroundResource(R.drawable.bg_key_action)
+            } else {
+                tv.setTextColor(
+                    if (i == 0 || (currentMode == KeyboardMode.ZHUYIN_FULL && i == 1)) themeColors.candidateText
+                    else themeColors.textPrimary
+                )
+                tv.setTypeface(null, Typeface.NORMAL)
+                tv.background = null
+            }
             tv.setOnClickListener {
                 triggerHapticFeedback(HapticType.COMMIT)
                 if (isCandidateGridOpen) {
                     closeCandidateGrid()
+                }
+                if (isZhuyinHeader) {
+                    val zhuyinStr = fullZhuyinBuffer.toString()
+                    fullZhuyinBuffer.clear()
+                    currentInputConnection?.finishComposingText()
+                    safeCommitText(zhuyinStr)
+                    clearCandidateBar()
+                    return@setOnClickListener
                 }
                 if (isHomophoneSelectionMode) {
                     if (entry.word.startsWith("✔")) {
@@ -2680,6 +2734,14 @@ class ZhuyinInputMethodService : InputMethodService() {
                 }
             }
             tv.setOnLongClickListener {
+                if (isZhuyinHeader) {
+                    triggerHapticFeedback(HapticType.MODE_SWITCH)
+                    fullZhuyinBuffer.clear()
+                    currentInputConnection?.setComposingText("", 1)
+                    currentInputConnection?.finishComposingText()
+                    clearCandidateBar()
+                    return@setOnLongClickListener true
+                }
                 val hasComp = engine.hasComposing() || fullZhuyinBuffer.isNotEmpty()
                 if (hasComp && !isHomophoneSelectionMode) {
                     triggerHapticFeedback(HapticType.MODE_SWITCH)
