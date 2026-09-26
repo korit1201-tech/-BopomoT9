@@ -2,6 +2,14 @@
 
 本專案遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/) 格式，並採用 [語意化版本 (Semantic Versioning)](https://semver.org/lang/zh-TW/)。
 
+## [v1.9.1] - 2026-09-26
+
+### 🐛 重大問題修復 (Critical Bug Fixes)
+- **修復全鍵盤打字時頻繁誤跳同音字修改視窗之重大問題**：
+  - **按鍵輸入冷卻防護 (Typing Immunity Window)**：打字、退格或清除時記錄時間戳，800ms 內的所有游標位移事件均被視為正常打字，絕不誤觸同音字修改。
+  - **嚴格選取判定 (Selection Only)**：改字觸發嚴格限定於使用者手動長按反白選取文字（`newSelStart != newSelEnd`），普通游標移動（`newSelStart == newSelEnd`）不再被誤判為長按。
+  - **彈出視窗生命週期強化**：懸浮修改選單與按鍵操作全面聯動，按下任意鍵打字、收合或換字時立即自動 dismiss，杜絕視窗殘留。
+
 ---
 
 ## [v1.9.0] - 2026-09-26

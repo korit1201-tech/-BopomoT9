@@ -6,6 +6,7 @@ import android.graphics.Typeface
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
@@ -156,6 +157,16 @@ class ZhuyinInputMethodService : InputMethodService() {
                 repeatHandler.postDelayed(this, REPEAT_INTERVAL)
             }
         }
+    }
+
+    private var lastUserTypingTime: Long = 0L
+    private var activeHomophonePopup: android.widget.PopupMenu? = null
+
+    private fun dismissHomophonePopup() {
+        try {
+            activeHomophonePopup?.dismiss()
+        } catch (_: Exception) {}
+        activeHomophonePopup = null
     }
 
     override fun onCreate() {
@@ -449,6 +460,8 @@ class ZhuyinInputMethodService : InputMethodService() {
 
             btn.onTapListener = {
                 triggerHapticFeedback()
+                lastUserTypingTime = SystemClock.uptimeMillis()
+                dismissHomophonePopup()
                 when (currentMode) {
                     KeyboardMode.ZHUYIN -> {
                         engine.currentContextWord = lastCommittedWord
@@ -489,6 +502,8 @@ class ZhuyinInputMethodService : InputMethodService() {
 
             btn.onSwipeListener = { direction ->
                 triggerHapticFeedback()
+                lastUserTypingTime = SystemClock.uptimeMillis()
+                dismissHomophonePopup()
                 when (currentMode) {
                     KeyboardMode.ZHUYIN -> {
                         val zhuyin = getSwipeZhuyin(keyNum, direction)
@@ -976,6 +991,8 @@ class ZhuyinInputMethodService : InputMethodService() {
             layoutParams = params
             setOnClickListener {
                 triggerHapticFeedback()
+                lastUserTypingTime = SystemClock.uptimeMillis()
+                dismissHomophonePopup()
                 fullZhuyinBuffer.clear()
                 currentInputConnection?.finishComposingText()
                 clearCandidateBar()
@@ -984,6 +1001,8 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun handleZhuyinFullKey(ch: Char) {
+        lastUserTypingTime = SystemClock.uptimeMillis()
+        dismissHomophonePopup()
         engine.currentContextWord = lastCommittedWord
         if (customComposingWord != null || isHomophoneSelectionMode) {
             customComposingWord = null
@@ -2183,6 +2202,8 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     private fun performBackspace() {
         triggerHapticFeedback()
+        lastUserTypingTime = SystemClock.uptimeMillis()
+        dismissHomophonePopup()
         resetT9MultiTap()
         if (isHomophoneSelectionMode) {
             exitHomophoneSelectionMode()
@@ -2608,10 +2629,12 @@ class ZhuyinInputMethodService : InputMethodService() {
         updateCandidateBar(candidateItems)
 
         // 同步彈出懸浮同音字選單，確保在任何 App 輸入框長按時能直觀看到選單
+        dismissHomophonePopup()
         try {
             val anchor = candidateContainer ?: rootView
             if (anchor != null) {
                 val popup = android.widget.PopupMenu(this, anchor)
+                activeHomophonePopup = popup
                 popup.menu.add(0, 0, 0, "✔ 保持原字【$targetChar】")
                 for ((index, homo) in homophones.withIndex()) {
                     if (homo.word != targetChar.toString()) {
@@ -2629,12 +2652,18 @@ class ZhuyinInputMethodService : InputMethodService() {
                     }
                     true
                 }
+                popup.setOnDismissListener {
+                    if (activeHomophonePopup === popup) {
+                        activeHomophonePopup = null
+                    }
+                }
                 popup.show()
             }
         } catch (_: Exception) {}
     }
 
     private fun applyHomophoneReplacement(entry: DictEntry) {
+        dismissHomophonePopup()
         val baseWord = getCurrentComposingText()
         if (homophoneCharIndex in baseWord.indices) {
             val sb = StringBuilder(baseWord)
@@ -2652,6 +2681,7 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun exitHomophoneSelectionMode() {
+        dismissHomophonePopup()
         isHomophoneSelectionMode = false
         homophoneCharIndex = -1
         val baseCandidates = if (currentMode == KeyboardMode.ZHUYIN_FULL) {
@@ -2749,6 +2779,17 @@ class ZhuyinInputMethodService : InputMethodService() {
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
 
+        // 1. 打字中冷卻防護：鍵盤輸入後 800ms 內的所有 selection 變動皆為打字產生的游標移動，絕不觸發改字視窗
+        if (SystemClock.uptimeMillis() - lastUserTypingTime < 800L) {
+            return
+        }
+
+        // 2. 只有在使用者真的進行「長按選取」（newSelStart != newSelEnd）時才視為長按改字：
+        // 一般光標移動或點擊時 newSelStart == newSelEnd，絕不觸發！
+        if (newSelStart == newSelEnd) {
+            return
+        }
+
         if (candidatesStart >= 0) {
             lastComposingStart = candidatesStart
             lastComposingEnd = candidatesEnd
@@ -2758,6 +2799,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         if (!hasComposing) {
             lastComposingStart = -1
             lastComposingEnd = -1
+            dismissHomophonePopup()
             return
         }
 
@@ -2767,17 +2809,12 @@ class ZhuyinInputMethodService : InputMethodService() {
         val cStart = if (candidatesStart >= 0) candidatesStart else lastComposingStart
         val cEnd = if (candidatesEnd >= 0) candidatesEnd else lastComposingEnd
 
-        // 游標在組字文字最尾端時為正常打字狀態，不觸發改字
-        if (cEnd > cStart && newSelStart == newSelEnd && newSelStart >= cEnd) {
-            return
-        }
-
-        // 判定使用者手動長按選取或點選組字區字元：
         if (cStart >= 0 && cEnd > cStart) {
-            val isSelection = newSelStart != newSelEnd
-            val isCursorInside = newSelStart in cStart until cEnd
-            if (isSelection || isCursorInside) {
-                val offset = (minOf(newSelStart, newSelEnd) - cStart).coerceIn(0, currentWord.length - 1)
+            val selMin = minOf(newSelStart, newSelEnd)
+            val selMax = maxOf(newSelStart, newSelEnd)
+            // 選取範圍與組字區間有重疊
+            if (selMin in cStart until cEnd || selMax in (cStart + 1)..cEnd) {
+                val offset = (selMin - cStart).coerceIn(0, currentWord.length - 1)
                 if (isHomophoneSelectionMode && homophoneCharIndex == offset) {
                     return
                 }
@@ -2926,6 +2963,11 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
+        dismissHomophonePopup()
+        if (isHomophoneSelectionMode) {
+            isHomophoneSelectionMode = false
+            homophoneCharIndex = -1
+        }
         engine.clear()
         lastCommittedWord = null
         resetT9MultiTap()
