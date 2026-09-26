@@ -304,6 +304,7 @@ class ZhuyinT9Engine(private val context: Context) {
         lockedZhuyinCombo = null
         cachedCandidates = emptyList()
         cachedZhuyinCombos = emptyList()
+        previousTopWord = null
     }
 
     fun hasComposing(): Boolean = currentKeys.isNotEmpty()
@@ -317,13 +318,15 @@ class ZhuyinT9Engine(private val context: Context) {
         return cachedCandidates
     }
 
+    private var previousTopWord: String? = null
+
     /**
-     * 現代漢語詞長優先評分模型（Word Length Preference Model）：
-     * 1. 現代漢語中雙字詞（2字詞）佔 75% 以上，三、四字詞次之，單字在連續按鍵下不應搶佔詞首。
-     * 2. 當輸入按鍵數較多時（>= 3 鍵），優先保證 2、3、4 字合法詞排在最前面。
-     * 3. 統一度量衡：完全匹配詞享有合理長度加成 (1.8x)，但絕不允許低頻生僻怪詞（如「記憶喔」）依靠完全匹配直接踩下高頻常用大詞（如「今天」）！
+     * 工業級 Rime-Chewing 融合評分模型：
+     * 1. 現代漢語詞長優先（2字詞 5.0x > 3字詞 3.5x > 4字詞 3.0x > 單字 0.15x）
+     * 2. Rime 未完成距離平滑折扣模型 (0.85^distance)，讓高頻未完成大詞自然浮現，徹底擊潰低頻生僻完全匹配怪詞！
+     * 3. 音節延續保護 (Syllable Continuity)：若候選詞繼承了使用者前一擊的首字音節（如「今」->「今天」），給予 1.6x 延續加成！
      */
-    private fun getEffectiveWeight(entry: DictEntry, inputKeyCount: Int, isExact: Boolean): Double {
+    private fun getEffectiveWeight(entry: DictEntry, inputKeyCount: Int, isExact: Boolean, prevTopWord: String? = null): Double {
         val userBoost = userDict.getBoost(entry.word)
         if (userBoost > 0) {
             return 1_000_000_000.0 + userBoost
@@ -342,9 +345,16 @@ class ZhuyinT9Engine(private val context: Context) {
             else -> 1.5
         }
 
-        val exactMultiplier = if (isExact) 1.8 else 1.0
+        // Rime 距離折扣模型
+        val targetKeyLen = KeyMapping.getSequence(entry.zhuyin, ignoreTones = true).size
+        val distance = maxOf(0, targetKeyLen - inputKeyCount)
+        val distanceMultiplier = if (isExact) 1.8 else Math.pow(0.85, distance.toDouble())
+
+        // 音節延續加成
+        val continuityMultiplier = if (prevTopWord != null && prevTopWord.isNotEmpty() && entry.word.startsWith(prevTopWord)) 1.6 else 1.0
+
         val tolerantMultiplier = if (entry.isTolerant) 0.35 else 1.0
-        return rawWeight * lengthMultiplier * exactMultiplier * tolerantMultiplier
+        return rawWeight * lengthMultiplier * distanceMultiplier * continuityMultiplier * tolerantMultiplier
     }
 
     // ───────── 核心查詢邏輯 ─────────
@@ -353,6 +363,7 @@ class ZhuyinT9Engine(private val context: Context) {
         if (currentKeys.isEmpty()) {
             cachedCandidates = emptyList()
             cachedZhuyinCombos = emptyList()
+            previousTopWord = null
             return
         }
 
@@ -370,6 +381,7 @@ class ZhuyinT9Engine(private val context: Context) {
 
         val cleanKeys = currentKeys.filter { it != 11 }
         val phonemeKeyLen = cleanKeys.size
+        val prevTop = previousTopWord
 
         val filteredExact = filterTone(exactResults)
         val filteredPrefix = filterTone(prefixResults)
@@ -378,12 +390,12 @@ class ZhuyinT9Engine(private val context: Context) {
         val pool = mutableMapOf<String, Pair<DictEntry, Double>>()
 
         for (e in filteredExact) {
-            val score = getEffectiveWeight(e, phonemeKeyLen, isExact = true)
+            val score = getEffectiveWeight(e, phonemeKeyLen, isExact = true, prevTopWord = prevTop)
             pool[e.word] = Pair(e, score)
         }
 
         for (p in filteredPrefix) {
-            val score = getEffectiveWeight(p, phonemeKeyLen, isExact = false)
+            val score = getEffectiveWeight(p, phonemeKeyLen, isExact = false, prevTopWord = prevTop)
             val existing = pool[p.word]
             if (existing == null || score > existing.second) {
                 pool[p.word] = Pair(p, score)
@@ -411,6 +423,8 @@ class ZhuyinT9Engine(private val context: Context) {
         } else {
             candidateList.addAll(rankedList)
         }
+
+        previousTopWord = candidateList.firstOrNull()?.word
 
         // 產生左側注音音節/詞彙組合列表（兼顧單字合法音節與多字詞組合，杜絕組合遺失與無字可選）
         val comboSet = LinkedHashSet<String>()
