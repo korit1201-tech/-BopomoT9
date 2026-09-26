@@ -1678,7 +1678,14 @@ class ZhuyinInputMethodService : InputMethodService() {
         btnMode123.includeFontPadding = false
         btnMode123.setOnClickListener {
             triggerHapticFeedback()
-            currentMode = if (currentMode == KeyboardMode.NUMBER_SYM) KeyboardMode.ZHUYIN else KeyboardMode.NUMBER_SYM
+            if (currentMode == KeyboardMode.NUMBER_SYM) {
+                currentMode = lastChineseMode
+            } else {
+                if (currentMode == KeyboardMode.ZHUYIN || currentMode == KeyboardMode.ZHUYIN_FULL) {
+                    lastChineseMode = currentMode
+                }
+                currentMode = KeyboardMode.NUMBER_SYM
+            }
             engine.clear()
             fullZhuyinBuffer.clear()
             lastCommittedWord = null
@@ -1713,7 +1720,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             }
         }
 
-        // 3. 右下角模式樞紐鍵 (中: 9鍵↔全鍵盤, 長按繁簡; 英: 大小寫三態; 數字: 回注音)
+        // 3. 右下角模式樞紐鍵 (中: 9鍵↔全鍵盤, 長按繁簡; 英: 大小寫三態; 數字: 切英文)
         btnLangToggle.setOnClickListener {
             triggerHapticFeedback()
             when (currentMode) {
@@ -1733,7 +1740,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                     currentInputConnection?.commitText("'", 1)
                 }
                 KeyboardMode.NUMBER_SYM -> {
-                    currentMode = KeyboardMode.ZHUYIN
+                    currentMode = KeyboardMode.ENGLISH_QWERTY
                     engine.clear()
                     fullZhuyinBuffer.clear()
                     currentInputConnection?.setComposingText("", 1)
@@ -2046,8 +2053,9 @@ class ZhuyinInputMethodService : InputMethodService() {
                 layoutQwerty.visibility = View.GONE
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
 
-                btnMode123.text = formatMode123Label("注音")
-                btnLangToggle.text = if (isSimplified) "簡體" else "繁體"
+                val chineseLabel = if (lastChineseMode == KeyboardMode.ZHUYIN_FULL) "全鍵" else "注音"
+                btnMode123.text = formatMode123Label(chineseLabel)
+                btnLangToggle.text = "英文"
                 btnSpaceSwipe.text = "空格"
                 btnQwertyToggle.visibility = View.VISIBLE
                 btnQwertyToggle.text = "( )"
