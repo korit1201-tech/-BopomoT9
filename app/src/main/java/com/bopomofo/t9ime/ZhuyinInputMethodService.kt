@@ -1620,7 +1620,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         btnComma = root.findViewById(R.id.btn_comma)
         btnPeriod = root.findViewById(R.id.btn_period)
 
-        // 1. 123 數字/符號模式切換
+        // 1. 123 數字/符號模式切換（長按打開設定）
         btnMode123.setOnClickListener {
             triggerHapticFeedback()
             currentMode = if (currentMode == KeyboardMode.NUMBER_SYM) KeyboardMode.ZHUYIN else KeyboardMode.NUMBER_SYM
@@ -1630,6 +1630,11 @@ class ZhuyinInputMethodService : InputMethodService() {
             currentInputConnection?.setComposingText("", 1)
             refreshUI(emptyList())
             updateKeyboardModeUI()
+        }
+        btnMode123.setOnLongClickListener {
+            triggerHapticFeedback(HapticType.MODE_SWITCH)
+            openSettings()
+            true
         }
 
         // 2. 左側鍵（數字模式下為括號雙向滑動鍵）
@@ -1692,7 +1697,14 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         btnLangToggle.setOnLongClickListener {
             triggerHapticFeedback(HapticType.MODE_SWITCH)
-            openSettings()
+            isSimplified = !isSimplified
+            val modeName = if (isSimplified) "簡體中文" else "繁體中文"
+            android.widget.Toast.makeText(this, "已切換為：$modeName", android.widget.Toast.LENGTH_SHORT).show()
+            updateKeyboardModeUI()
+            if (engine.hasComposing() || fullZhuyinBuffer.isNotEmpty()) {
+                val cands = if (currentMode == KeyboardMode.ZHUYIN_FULL) engine.searchFullZhuyin(fullZhuyinBuffer.toString()) else engine.getCandidates()
+                refreshUI(cands)
+            }
             true
         }
 
@@ -2545,7 +2557,14 @@ class ZhuyinInputMethodService : InputMethodService() {
                     selectCandidate(entry)
                 }
             }
-            tv.setOnLongClickListener(null)
+            tv.setOnLongClickListener {
+                val hasComp = engine.hasComposing() || fullZhuyinBuffer.isNotEmpty()
+                if (hasComp && !isHomophoneSelectionMode) {
+                    triggerHapticFeedback(HapticType.MODE_SWITCH)
+                    enterHomophoneSelectionMode(0)
+                    true
+                } else false
+            }
 
             tv.visibility = View.VISIBLE
         }
@@ -2560,12 +2579,20 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
     }
 
+    private fun getCurrentComposingText(): String {
+        return if (currentMode == KeyboardMode.ZHUYIN_FULL) {
+            customComposingWord ?: (engine.searchFullZhuyin(fullZhuyinBuffer.toString()).firstOrNull()?.word ?: fullZhuyinBuffer.toString())
+        } else {
+            customComposingWord ?: engine.getTopComposingWord()
+        }
+    }
+
     /**
      * 底線文字選取同音替換模式：
      * 當使用者在輸入區長按或點選底線候選字中的某個字時，候選列切換為同音/同拼法候選字。
      */
     private fun enterHomophoneSelectionMode(charIndex: Int) {
-        val currentWord = customComposingWord ?: engine.getTopComposingWord()
+        val currentWord = getCurrentComposingText()
         if (charIndex !in currentWord.indices) return
 
         isHomophoneSelectionMode = true
@@ -2589,7 +2616,7 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun applyHomophoneReplacement(entry: DictEntry) {
-        val baseWord = customComposingWord ?: engine.getTopComposingWord()
+        val baseWord = getCurrentComposingText()
         if (homophoneCharIndex in baseWord.indices) {
             val sb = StringBuilder(baseWord)
             sb.setCharAt(homophoneCharIndex, entry.word[0])
@@ -2608,14 +2635,19 @@ class ZhuyinInputMethodService : InputMethodService() {
     private fun exitHomophoneSelectionMode() {
         isHomophoneSelectionMode = false
         homophoneCharIndex = -1
+        val baseCandidates = if (currentMode == KeyboardMode.ZHUYIN_FULL) {
+            engine.searchFullZhuyin(fullZhuyinBuffer.toString())
+        } else {
+            engine.getCandidates()
+        }
         if (customComposingWord != null) {
             val preview = customComposingWord!!
             val candidates = mutableListOf<DictEntry>()
             candidates.add(DictEntry(preview, "", 100_000_000))
-            candidates.addAll(engine.getCandidates().filter { it.word != preview })
+            candidates.addAll(baseCandidates.filter { it.word != preview })
             updateCandidateBar(candidates)
         } else {
-            updateCandidateBar(engine.getCandidates())
+            updateCandidateBar(baseCandidates)
         }
     }
 
@@ -2703,40 +2735,35 @@ class ZhuyinInputMethodService : InputMethodService() {
             lastComposingEnd = candidatesEnd
         }
 
-        if (!engine.hasComposing()) {
+        val hasComposing = engine.hasComposing() || fullZhuyinBuffer.isNotEmpty()
+        if (!hasComposing) {
             lastComposingStart = -1
             lastComposingEnd = -1
             return
         }
 
-        val currentWord = customComposingWord ?: engine.getTopComposingWord()
+        val currentWord = getCurrentComposingText()
         if (currentWord.isEmpty()) return
 
         val cStart = if (candidatesStart >= 0) candidatesStart else lastComposingStart
         val cEnd = if (candidatesEnd >= 0) candidatesEnd else lastComposingEnd
-        if (cStart < 0 || cEnd <= cStart) return
 
-        // IME 正常打字更新組字時，游標自動置於 cEnd（newSelStart == newSelEnd == cEnd），不觸發同音替換
-        if (newSelStart == newSelEnd && newSelStart == cEnd) {
+        // 游標在組字文字最尾端時為正常打字狀態，不觸發改字
+        if (cEnd > cStart && newSelStart == newSelEnd && newSelStart >= cEnd) {
             return
         }
 
         // 判定使用者手動長按選取或點選組字區字元：
-        // 1. 長按選取：newSelStart != newSelEnd 且範圍在組字區內
-        // 2. 游標點選：newSelStart == newSelEnd 但落在組字區內部 (cStart <= newSelStart < cEnd)
-        val isSelection = newSelStart != newSelEnd && newSelStart >= cStart && newSelEnd <= cEnd
-        val isCursorInside = newSelStart == newSelEnd && newSelStart >= cStart && newSelStart < cEnd
-
-        if (isSelection || isCursorInside) {
-            val charIndex = (newSelStart - cStart).coerceIn(0, currentWord.length - 1)
-            if (isHomophoneSelectionMode && homophoneCharIndex == charIndex) {
-                return
-            }
-            triggerHapticFeedback()
-            enterHomophoneSelectionMode(charIndex)
-        } else if (newSelStart < cStart || newSelStart > cEnd) {
-            if (!isHomophoneSelectionMode) {
-                commitProcessedWordWithUserDict(currentWord)
+        if (cStart >= 0 && cEnd > cStart) {
+            val isSelection = newSelStart != newSelEnd
+            val isCursorInside = newSelStart in cStart until cEnd
+            if (isSelection || isCursorInside) {
+                val offset = (minOf(newSelStart, newSelEnd) - cStart).coerceIn(0, currentWord.length - 1)
+                if (isHomophoneSelectionMode && homophoneCharIndex == offset) {
+                    return
+                }
+                triggerHapticFeedback()
+                enterHomophoneSelectionMode(offset)
             }
         }
     }
