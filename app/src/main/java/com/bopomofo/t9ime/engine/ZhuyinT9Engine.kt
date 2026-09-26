@@ -714,7 +714,94 @@ class ZhuyinT9Engine(private val context: Context) {
         val seenWords = hashSetOf<String>()
 
         val cleanInput = inputZhuyin.filter { it !in "ˇˋˊ˙" }
+        val toneChar = inputZhuyin.find { it in "ˇˋˊ˙" }
+        val isSingleSyllable = SyllableManager.isValidSyllable(cleanInput)
+        val soundMatches = soundToCharMap[cleanInput]
 
+        // 策略分流：
+        // A. 若輸入構成合法單音節且字典中有單字對應（例如 ㄒㄧㄢ、ㄓㄨ、ㄇㄚ、ㄕ、ㄍㄨㄛ 等）：
+        //    使用者在拼寫單一字音，候選字必須以該音節之「單字同音字」為最優先呈現！
+        if (isSingleSyllable && !soundMatches.isNullOrEmpty()) {
+            val singleEntries = mutableListOf<DictEntry>()
+
+            // 1. 個人詞庫中的該音節單字（最高優先）
+            val userEntries = userDict.getAllEntries()
+            val userCharSet = hashSetOf<String>()
+            for (u in userEntries) {
+                if (u.word.length == 1) {
+                    val uClean = u.zhuyin.filter { it !in "ˇˋˊ˙" }
+                    if (uClean == cleanInput) {
+                        userCharSet.add(u.word)
+                        val baseWeight = 50_000_000 + u.count * 1_000_000
+                        val toneBonus = if (toneChar != null) {
+                            if (u.zhuyin.contains(toneChar)) 20_000_000 else 0
+                        } else {
+                            if (!u.zhuyin.any { it in "ˇˋˊ˙" }) 5_000_000 else 0
+                        }
+                        singleEntries.add(DictEntry(u.word, u.zhuyin, baseWeight + toneBonus))
+                    }
+                }
+            }
+
+            // 2. 字典反向索引中的所有單字同音字
+            for (e in soundMatches) {
+                if (userCharSet.contains(e.word)) continue
+                val boost = userDict.getBoost(e.word)
+                val baseWeight = e.weight + boost
+                val toneBonus = if (toneChar != null) {
+                    if (e.zhuyin.contains(toneChar)) 20_000_000 else 0
+                } else {
+                    if (!e.zhuyin.any { it in "ˇˋˊ˙" }) 5_000_000 else 0
+                }
+                singleEntries.add(DictEntry(e.word, e.zhuyin, baseWeight + toneBonus))
+            }
+
+            // 排序單字：依據綜合加權降序
+            singleEntries.sortByDescending { it.weight }
+            for (e in singleEntries) {
+                if (seenWords.add(e.word)) {
+                    results.add(e)
+                }
+            }
+
+            // 3. 單字之後，再補入該音節開頭的常用詞彙（個人詞庫多字詞與 Trie 詞庫）
+            val userMultiEntries = userEntries.filter {
+                it.word.length > 1 && it.zhuyin.filter { c -> c !in "ˇˋˊ˙" }.startsWith(cleanInput)
+            }.sortedByDescending { it.count }
+            for (u in userMultiEntries) {
+                if (seenWords.add(u.word)) {
+                    results.add(DictEntry(u.word, u.zhuyin, 30_000_000 + u.count * 1_000_000))
+                    if (results.size >= 40) break
+                }
+            }
+
+            val keys = cleanInput.mapNotNull { KeyMapping.getKeyId(it) }
+            if (keys.isNotEmpty()) {
+                val trieResults = trie.searchPrefix(keys)
+                val sortedTrieResults = if (toneChar != null) {
+                    trieResults.sortedByDescending {
+                        if (it.zhuyin.startsWith(inputZhuyin) || it.zhuyin.takeWhile { c -> c != ' ' }.contains(toneChar)) {
+                            it.weight + 10_000_000
+                        } else {
+                            it.weight
+                        }
+                    }
+                } else {
+                    trieResults
+                }
+                for (e in sortedTrieResults) {
+                    val eClean = e.zhuyin.filter { it !in "ˇˋˊ˙" }
+                    if (eClean.startsWith(cleanInput) && seenWords.add(e.word)) {
+                        results.add(e)
+                        if (results.size >= 60) break
+                    }
+                }
+            }
+
+            return results
+        }
+
+        // B. 非合法單音節或字典中無獨立單字音節（如簡拼 ㄐㄊ、混合簡打 ㄐㄧㄣㄊ、長詞全拼等）：
         // 1. 個人詞庫 (UserDict) 最高優先權
         val userEntries = userDict.getAllEntries()
         for (u in userEntries) {

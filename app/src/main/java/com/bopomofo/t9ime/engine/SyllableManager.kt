@@ -134,6 +134,6 @@ object SyllableManager {
      * 檢查注音字串是否為合法音節（無聲調）
      */
     fun isValidSyllable(cleanZhuyin: String): Boolean {
-        return cleanZhuyin in VALID_SYLLABLES
+        return cleanZhuyin in VALID_SYLLABLES_SET
     }
 }
