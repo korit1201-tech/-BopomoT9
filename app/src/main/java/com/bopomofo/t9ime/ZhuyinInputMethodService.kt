@@ -1900,9 +1900,14 @@ class ZhuyinInputMethodService : InputMethodService() {
         return spannable
     }
 
-    private fun formatSpaceChineseSubModeLabel(current: String, leftHint: String, rightHint: String): CharSequence {
+    private fun formatSpaceChineseSubModeLabel(
+        current: String,
+        leftHint: String,
+        rightHint: String,
+        isCompact: Boolean = false
+    ): CharSequence {
         // 第一行：左側提示 + 中央主字 + 右側提示；第二行：空白鍵符號
-        val line1 = "‹ $leftHint  $current  $rightHint ›"
+        val line1 = if (isCompact) "‹ $leftHint $current $rightHint ›" else "‹ $leftHint  $current  $rightHint ›"
         val line2 = "␣ 空白"
         val fullText = "$line1\n$line2"
         val spannable = SpannableString(fullText)
@@ -1913,20 +1918,24 @@ class ZhuyinInputMethodService : InputMethodService() {
         val currentStart = line1.indexOf(current)
         val currentEnd = currentStart + current.length
 
+        val baseSize = if (isCompact) 0.68f else 0.80f
+        val mainSize = if (isCompact) 1.08f else 1.35f
+        val line2Size = if (isCompact) 0.65f else 0.75f
+
         // 整體小字基礎（左側與右側提示）
-        spannable.setSpan(RelativeSizeSpan(0.80f), 0, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(RelativeSizeSpan(baseSize), 0, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(ForegroundColorSpan(secondaryColor), 0, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
 
         // 中央主字（中/EN/手）：大號、加粗、主色
         if (currentStart >= 0) {
-            spannable.setSpan(RelativeSizeSpan(1.35f), currentStart, currentEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            spannable.setSpan(RelativeSizeSpan(mainSize), currentStart, currentEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             spannable.setSpan(StyleSpan(Typeface.BOLD), currentStart, currentEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             spannable.setSpan(ForegroundColorSpan(primaryColor), currentStart, currentEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
 
         // 第二行 ␣ 空白：適中字號
         val line2Start = line1.length + 1
-        spannable.setSpan(RelativeSizeSpan(0.75f), line2Start, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(RelativeSizeSpan(line2Size), line2Start, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(ForegroundColorSpan(secondaryColor), line2Start, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
 
         return spannable
@@ -2027,7 +2036,8 @@ class ZhuyinInputMethodService : InputMethodService() {
 
                 btnMode123.text = formatMode123Label("123")
                 btnLangToggle.text = if (isSimplified) "全鍵·簡" else "全鍵·繁"
-                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "英文", "手寫")
+                btnSpaceSwipe.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 17f)
+                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "英文", "手寫", isCompact = false)
                 btnQwertyToggle.visibility = View.GONE
                 if (::btnComma.isInitialized) btnComma.text = if (isTraditionalMode()) "，" else ","
                 if (::btnPeriod.isInitialized) btnPeriod.text = if (isTraditionalMode()) "。" else "."
@@ -2047,7 +2057,8 @@ class ZhuyinInputMethodService : InputMethodService() {
 
                 btnMode123.text = formatMode123Label("123")
                 btnLangToggle.text = if (isSimplified) "9鍵·簡" else "9鍵·繁"
-                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "英文", "手寫")
+                btnSpaceSwipe.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13.5f)
+                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "英文", "手寫", isCompact = true)
                 btnQwertyToggle.visibility = View.GONE
                 if (::btnComma.isInitialized) btnComma.text = if (isTraditionalMode()) "，" else ","
                 if (::btnPeriod.isInitialized) btnPeriod.text = if (isTraditionalMode()) "。" else "."
@@ -2061,6 +2072,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 val chineseLabel = if (lastChineseMode == KeyboardMode.ZHUYIN_FULL) "全鍵" else "注音"
                 btnMode123.text = formatMode123Label(chineseLabel)
                 btnLangToggle.text = "英文"
+                btnSpaceSwipe.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 17f)
                 btnSpaceSwipe.text = "空格"
                 btnQwertyToggle.visibility = View.VISIBLE
                 btnQwertyToggle.text = "( )"
@@ -2082,7 +2094,8 @@ class ZhuyinInputMethodService : InputMethodService() {
 
                 btnMode123.text = formatMode123Label("123")
                 btnLangToggle.text = formatAbbrevLabel()
-                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("EN", "手寫", "中文")
+                btnSpaceSwipe.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 17f)
+                btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("EN", "手寫", "中文", isCompact = false)
                 btnQwertyToggle.visibility = View.GONE
                 if (::btnComma.isInitialized) btnComma.text = ","
                 if (::btnPeriod.isInitialized) btnPeriod.text = "."
