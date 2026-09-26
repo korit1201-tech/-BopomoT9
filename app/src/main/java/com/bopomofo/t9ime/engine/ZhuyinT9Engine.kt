@@ -718,15 +718,6 @@ class ZhuyinT9Engine(private val context: Context) {
             }
         }
 
-        // 6. 依據新酷音詞長偏好模型與完全匹配加成進行候選詞整體重排（2字詞 > 3字詞 > 4字詞 > 單字）
-        results.sortWith(
-            compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
-                .thenByDescending {
-                    val isExact = it.zhuyin.filter { c -> c !in "ˇˋˊ˙" } == cleanInput
-                    getEffectiveWeight(it, cleanInput.length, isExact = isExact)
-                }
-        )
-
         return results
     }
 

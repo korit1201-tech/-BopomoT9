@@ -1003,7 +1003,7 @@ class ZhuyinInputMethodService : InputMethodService() {
     private fun handleZhuyinFullKey(ch: Char) {
         lastUserTypingTime = SystemClock.uptimeMillis()
         dismissHomophonePopup()
-        engine.currentContextWord = lastCommittedWord
+        lastCommittedWord = null
         if (customComposingWord != null || isHomophoneSelectionMode) {
             customComposingWord = null
             replacedCharsMap.clear()
@@ -1011,26 +1011,11 @@ class ZhuyinInputMethodService : InputMethodService() {
             homophoneCharIndex = -1
         }
 
-        // 新酷音詞邊界智慧自動確認 (Word Boundary Auto-Commit)：
-        // 若當前已有完整多字詞候選（如「概念」、「目前」、「今天」），
-        // 且加上新按鍵 ch 無法匹配候選詞，或新按鍵是新聲母且無法延伸成更長詞，立即自動確認上屏前綴詞！
-        if (fullZhuyinBuffer.isNotEmpty()) {
-            val curCands = engine.searchFullZhuyin(fullZhuyinBuffer.toString(), lastCommittedWord)
-            val topEntry = curCands.firstOrNull()
-            if (topEntry != null && topEntry.word.length >= 2) {
-                val nextTest = engine.searchFullZhuyin(fullZhuyinBuffer.toString() + ch, lastCommittedWord)
-                val isNewWordStart = nextTest.isEmpty() || (nextTest.none { it.word.startsWith(topEntry.word) } && com.bopomofo.t9ime.engine.KeyMapping.ALL_INITIALS.contains(ch))
-                if (isNewWordStart) {
-                    commitProcessedWordWithUserDict(topEntry.word, topEntry.zhuyin)
-                }
-            }
-        }
-
         fullZhuyinBuffer.append(ch)
         updateComposingPreviewFull()
 
-        // 呼叫注音全鍵盤專屬預測與候選檢索引擎（支援聲母簡拼、混合簡打與 Bigram 語境加權）
-        val candidates = engine.searchFullZhuyin(fullZhuyinBuffer.toString(), lastCommittedWord)
+        // 呼叫注音全鍵盤專屬預測與候選檢索引擎（獨立簡拼、混合簡拼與全拼聯想）
+        val candidates = engine.searchFullZhuyin(fullZhuyinBuffer.toString())
         refreshUI(candidates)
     }
 
@@ -2867,6 +2852,10 @@ class ZhuyinInputMethodService : InputMethodService() {
         if (currentMode == KeyboardMode.ZHUYIN || currentMode == KeyboardMode.ZHUYIN_FULL) {
             // A. Backspace 刪除
             if (keyCode == KeyEvent.KEYCODE_DEL) {
+                if (currentMode == KeyboardMode.ZHUYIN_FULL && fullZhuyinBuffer.isNotEmpty()) {
+                    performBackspace()
+                    return true
+                }
                 if (engine.hasComposing()) {
                     performBackspace()
                     return true
@@ -2876,6 +2865,12 @@ class ZhuyinInputMethodService : InputMethodService() {
 
             // B. Space 空白鍵
             if (keyCode == KeyEvent.KEYCODE_SPACE) {
+                if (currentMode == KeyboardMode.ZHUYIN_FULL && fullZhuyinBuffer.isNotEmpty()) {
+                    val candidates = engine.searchFullZhuyin(fullZhuyinBuffer.toString())
+                    val topWord = candidates.firstOrNull()?.word ?: fullZhuyinBuffer.toString()
+                    commitProcessedWordWithUserDict(topWord)
+                    return true
+                }
                 if (engine.hasComposing()) {
                     val topWord = customComposingWord ?: engine.getCandidates().firstOrNull()?.word ?: engine.getTopComposingWord()
                     commitProcessedWordWithUserDict(topWord)
@@ -2888,7 +2883,7 @@ class ZhuyinInputMethodService : InputMethodService() {
 
             // C. Enter 鍵確認直接送出當前注音/預測候選
             if (keyCode == KeyEvent.KEYCODE_ENTER) {
-                if (engine.hasComposing()) {
+                if ((currentMode == KeyboardMode.ZHUYIN_FULL && fullZhuyinBuffer.isNotEmpty()) || engine.hasComposing()) {
                     performEnterAction()
                     return true
                 }
@@ -2900,7 +2895,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             if (hasActiveComposing && keyCode in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_9) {
                 val selectIndex = keyCode - KeyEvent.KEYCODE_1
                 val candidates = if (currentMode == KeyboardMode.ZHUYIN_FULL) {
-                    engine.searchFullZhuyin(fullZhuyinBuffer.toString(), lastCommittedWord)
+                    engine.searchFullZhuyin(fullZhuyinBuffer.toString())
                 } else {
                     engine.getCandidates()
                 }
