@@ -421,6 +421,10 @@ class ZhuyinInputMethodService : InputMethodService() {
         btnCandidateGridClose?.setOnClickListener {
             closeCandidateGrid()
         }
+        root.findViewById<Button>(R.id.btn_candidate_grid_settings)?.setOnClickListener {
+            triggerHapticFeedback(HapticType.MODE_SWITCH)
+            openSettings()
+        }
 
         setup12KeyLayout(root)
         setupZhuyinFullLayout(root)
@@ -1041,7 +1045,8 @@ class ZhuyinInputMethodService : InputMethodService() {
         tabClip?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.CLIPBOARD) }
         tabEmoji?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.EMOJI) }
         tabKaomoji?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.KAOMOJI) }
-        tabSnippet?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); switchSymbolTab(SymbolTab.SNIPPET) }
+        val btnSettings = root.findViewById<Button>(R.id.btn_settings_symbol_panel)
+        btnSettings?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); openSettings() }
         btnClose?.setOnClickListener { triggerHapticFeedback(HapticType.MODE_SWITCH); hideSymbolPanel() }
 
         btnSymbolDrawer.setOnClickListener {
@@ -1051,6 +1056,11 @@ class ZhuyinInputMethodService : InputMethodService() {
             } else {
                 showSymbolPanel()
             }
+        }
+        btnSymbolDrawer.setOnLongClickListener {
+            triggerHapticFeedback(HapticType.MODE_SWITCH)
+            openSettings()
+            true
         }
     }
 
@@ -1681,22 +1691,9 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
 
         btnLangToggle.setOnLongClickListener {
-            triggerHapticFeedback()
-            when (currentMode) {
-                KeyboardMode.ZHUYIN, KeyboardMode.ZHUYIN_FULL, KeyboardMode.NUMBER_SYM -> {
-                    isSimplified = !isSimplified
-                    updateKeyboardModeUI()
-                    if (engine.hasComposing()) {
-                        refreshUI(engine.getCandidates())
-                    }
-                    true
-                }
-                KeyboardMode.ENGLISH_QWERTY -> {
-                    openSettings()
-                    true
-                }
-                else -> false
-            }
+            triggerHapticFeedback(HapticType.MODE_SWITCH)
+            openSettings()
+            true
         }
 
         btnSpaceSwipe.transformationMethod = null
