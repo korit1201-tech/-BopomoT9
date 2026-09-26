@@ -2,6 +2,67 @@
 
 本專案遵循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.0.0/) 格式，並採用 [語意化版本 (Semantic Versioning)](https://semver.org/lang/zh-TW/)。
 
+## [v1.9.7] - 2026-09-26
+
+### 🛡️ 啟動防崩潰與資源完整性修復 (Emergency Crash Fix)
+- **解除資源過度縮減導致的致命崩潰**：
+  - 關閉 Release 建置中的 `isShrinkResources`，徹底解決 R8 / Resource Shrinker 誤刪 AndroidX / AppCompat 核心樣式、動畫與主題資源，引發系統在啟動時拋出 `Resources$NotFoundException` 導致 App 閃退與鍵盤出不來的致命問題。
+- **全方位防禦性異常保護**：
+  - `ZhuyinInputMethodService` 的 `onCreate()`、`onCreateInputView()`、`onFinishInputView()` 全面加入安全防護與實例檢查，杜絕任何未初始化屬性異常（`UninitializedPropertyAccessException`）。
+  - `PreferencesRepository` 讀寫操作全面導入防禦性例外攔截與對齊預設常數（`DEFAULT_ONE_HANDED_MODE = "full"`）。
+  - `ZhuyinT9Engine` Bigram 檔案存取安全防護，避免 Context 在啟動初期因檔案路徑引發非預期異常。
+  - `MainActivity` 生命週期加入異常防護，確保設定頁面與詞庫統計永遠穩定開啟。
+
+---
+
+## [v1.9.6] - 2026-09-26
+
+### 🧠 深度架構優化 Phase 2 & 3 (Sonnet Full Architecture Enhancement)
+- **偏好設定儲存庫集中管理 (PreferencesRepository)**：
+  - 新增 `PreferencesRepository` 集中管理所有 `SharedPreferences` 鍵值與讀寫邏輯，杜絕硬編碼字串散落與拼寫錯誤隱患。
+  - 鍵盤高度拉伸、多級觸覺震動開關與強度、單手模式切換全面串接儲存庫。
+- **Bigram 語境關聯詞持久化存檔**：
+  - 徹底解決關聯詞學習重開機歸零問題：`ZhuyinT9Engine` 導入 `user_bigram.json` 本地讀寫與防抖非同步存檔機制，使用者打字累積的上下文搭配詞永久記憶。
+- **實體鍵盤 Shift 衝突徹底修復**：
+  - 修復注音全鍵盤模式下實體鍵盤單按 Shift 無法切換英文的邏輯缺陷，切換時精確保留使用者偏好的中文鍵盤形態。
+  - 修復 Shift + 數字鍵（打 `#`, `$`, `%` 等符號）被大千注音聲調（`ˇ`, `ˋ`, `ˊ`, `˙`）劫持的問題，組合鍵放行由系統精準輸出符號。
+- **安全上屏機制 (safeCommitText)**：
+  - 封裝統一的 `safeCommitText` 上屏防護函式，防止 InputConnection 失效時無聲丟失文字。
+
+---
+
+## [v1.9.5] - 2026-09-26
+
+### 🔤 英文鍵盤直覺體驗重構 (QWERTY Keyboard UX Refinement)
+- **Shift 鍵直覺三態樣式 (方案 1)**：
+  - **全小寫 (LOWER)**：顯示空心箭頭 `⇧`，普通按鍵底色與一般文字顏色，字母呈現全小寫。
+  - **單次首字大寫 (FIRST_UPPER)**：顯示實心箭頭 `⬆`，文字跳亮為主題高亮色（Accent），字母呈現全大寫，打完一字自動恢復小寫。
+  - **大寫鎖定 (ALL_UPPER / CapsLock)**：顯示 `⇪`，按鍵背景整體切換為高亮藍底白字（`bg_key_active`），極致醒目，告別看不懂的 Unicode 點號。
+- **英文模式右下角按鍵改為「一鍵回中文」(方案 A)**：
+  - 徹底解決右下角 `abc` 與第 3 排 `Shift` 功能重複問題。
+  - 英文模式下右下角固定顯示 **`中文`**，點一下秒速切換回注音輸入法，並自動記住切回使用者偏好的「9 鍵」或「全鍵盤」。
+  - 長按依然支援「繁體 ↔ 簡體」中文切換。
+
+---
+
+## [v1.9.4] - 2026-09-26
+
+### 🛡️ 架構體檢 Phase 1 安全與效能修復 (Sonnet Code Health Review Fixes)
+- **根除記憶體洩漏漏洞**：
+  - 修復 `repeatHandler` 跨生命週期存活問題：在 `onDestroy()` 與 `onFinishInputView()` 中確實清除回呼與重置狀態，杜絕長按退格背景空轉。
+  - 修復 `ClipboardManager` 監聽器洩漏：保存 `clipListener` 實例並於 `onDestroy()` 呼叫 `removePrimaryClipChangedListener()`，避免 Service 被系統常駐強引用。
+  - 手寫辨識非同步回呼加入 `isInputViewShown && currentMode == HANDWRITING` 存活檢查，防止銷毀後視圖操作例外與候選列被沖刷。
+- **QWERTY 按鍵渲染零 GC 優化**：
+  - 重構 `updateQwertyKeysText()`：大小寫切換改為直接遍歷現有按鈕更新文字，徹底移除原本每次切換大小寫都執行 `removeAllViews()` 重新全量構建 26+ 個 Button 的昂貴開銷，消除輸入卡頓。
+- **字典檢索與記憶體去重加速**：
+  - `TrieNode.exactEntries` 改為 `LinkedHashMap` 儲存結構，在插入字典時即完成去重（相同字詞保留最大權重），徹底移除 `searchExact` 每次重複運算的 `distinctBy` 開銷。
+  - 構建 `soundToCharMap` 單字音節反向索引，全鍵盤大千注音單字檢索由 O(n) 全表線性掃描優化為 O(1) 瞬時查詢。
+- **程式碼瘦身與主題體驗**：
+  - 徹底移除 9 處無效的 `resetT9MultiTap()` 死函式調用。
+  - `SwipeKeyButton` 滑動拖選文字顏色動態綁定 `kb_text_primary` 主題色彩，深淺色主題下均清晰可讀。
+
+---
+
 ## [v1.9.3] - 2026-09-26
 
 ### 🔄 空白鍵滑動切換與標籤對齊 (Space Key Swipe & Label Alignment)

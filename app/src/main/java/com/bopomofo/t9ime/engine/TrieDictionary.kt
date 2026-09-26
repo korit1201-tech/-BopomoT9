@@ -15,7 +15,9 @@ data class DictEntry(
  */
 class TrieNode {
     val children = mutableMapOf<Int, TrieNode>()
-    val exactEntries = mutableListOf<DictEntry>()
+    // LinkedHashMap<word, DictEntry>：插入時去重，相同詞取 weight 最大者，
+    // 避免 searchExact 每次執行昂貴的 distinctBy 操作
+    val exactEntries = LinkedHashMap<String, DictEntry>()
 }
 
 class TrieDictionary {
@@ -54,7 +56,11 @@ class TrieDictionary {
         for (k in seq) {
             curr = curr.children.getOrPut(k) { TrieNode() }
         }
-        curr.exactEntries.add(entry)
+        // 相同詞取 weight 最大者，避免 searchExact 執行 distinctBy
+        val existing = curr.exactEntries[entry.word]
+        if (existing == null || entry.weight > existing.weight) {
+            curr.exactEntries[entry.word] = entry
+        }
     }
 
     /**
@@ -84,8 +90,8 @@ class TrieDictionary {
     fun searchExact(sequence: List<Int>): List<DictEntry> {
         if (sequence.isEmpty()) return emptyList()
         val targetNode = searchNode(sequence) ?: return emptyList()
-        return targetNode.exactEntries
-            .distinctBy { it.word }
+        // exactEntries 已在 insert 時去重，直接排序即可，無需 distinctBy
+        return targetNode.exactEntries.values
             .sortedWith(
                 compareByDescending<DictEntry> { !it.isTolerant }
                     .thenByDescending { it.weight }
@@ -95,7 +101,7 @@ class TrieDictionary {
     fun searchPrefix(sequence: List<Int>, maxDepth: Int = 3): List<DictEntry> {
         if (sequence.isEmpty()) return emptyList()
         val targetNode = searchNode(sequence) ?: return emptyList()
-        val exactWords = targetNode.exactEntries.map { it.word }.toSet()
+        val exactWords = targetNode.exactEntries.keys  // LinkedHashMap 的 key set 即為已去重詞集合
         val prefixList = mutableListOf<DictEntry>()
         collectPrefix(targetNode, prefixList, 0, maxDepth)
         return prefixList
@@ -112,7 +118,7 @@ class TrieDictionary {
         for ((_, child) in node.children) {
             val remaining = 50 - results.size
             if (remaining <= 0) return
-            results.addAll(child.exactEntries.take(remaining))
+            results.addAll(child.exactEntries.values.take(remaining))
             collectPrefix(child, results, depth + 1, maxDepth)
         }
     }

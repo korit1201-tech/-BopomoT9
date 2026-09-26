@@ -35,6 +35,7 @@ import android.view.HapticFeedbackConstants
 import androidx.core.content.ContextCompat
 import com.bopomofo.t9ime.engine.ChineseConverter
 import com.bopomofo.t9ime.engine.ClipboardHistoryManager
+import com.bopomofo.t9ime.data.PreferencesRepository
 import com.bopomofo.t9ime.engine.DictEntry
 import com.bopomofo.t9ime.engine.EmojiKaomojiManager
 import com.bopomofo.t9ime.engine.SnippetManager
@@ -90,6 +91,7 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private var currentMode = KeyboardMode.ZHUYIN
+    private var lastChineseMode = KeyboardMode.ZHUYIN
     private var isSimplified = false
     private var englishCaseState = EnglishCaseState.LOWER
     private val isCapsLock: Boolean
@@ -161,6 +163,7 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     private var lastUserTypingTime: Long = 0L
     private var activeHomophonePopup: android.widget.PopupMenu? = null
+    private var clipListener: android.content.ClipboardManager.OnPrimaryClipChangedListener? = null
 
     private fun dismissHomophonePopup() {
         try {
@@ -171,12 +174,16 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     override fun onCreate() {
         super.onCreate()
-        engine = ZhuyinT9Engine(this).apply {
-            onDictionaryLoadedListener = {
-                if (hasComposing()) {
-                    refreshUI(getCandidates())
+        try {
+            engine = ZhuyinT9Engine(this).apply {
+                onDictionaryLoadedListener = {
+                    if (hasComposing()) {
+                        refreshUI(getCandidates())
+                    }
                 }
             }
+        } catch (e: Exception) {
+            android.util.Log.e("BopomofoIME", "Engine 初始化例外", e)
         }
         vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
@@ -205,8 +212,8 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         try {
             val clipManager = getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-            clipManager?.addPrimaryClipChangedListener {
-                val clipData = clipManager.primaryClip
+            val listener = android.content.ClipboardManager.OnPrimaryClipChangedListener {
+                val clipData = clipManager?.primaryClip
                 if (clipData != null && clipData.itemCount > 0) {
                     val text = clipData.getItemAt(0)?.coerceToText(this)?.toString()
                     if (!text.isNullOrBlank()) {
@@ -221,11 +228,21 @@ class ZhuyinInputMethodService : InputMethodService() {
                     }
                 }
             }
+            clipListener = listener
+            clipManager?.addPrimaryClipChangedListener(listener)
         } catch (_: Exception) {}
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        repeatHandler.removeCallbacksAndMessages(null)
+        try {
+            clipListener?.let { listener ->
+                val clipManager = getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                clipManager?.removePrimaryClipChangedListener(listener)
+            }
+        } catch (_: Exception) {}
+        clipListener = null
         googleRecognizer?.close()
     }
 
@@ -250,11 +267,9 @@ class ZhuyinInputMethodService : InputMethodService() {
      */
     private fun triggerHapticFeedback(type: HapticType = HapticType.KEY_PRESS) {
         try {
-            val prefs = getSharedPreferences("ime_prefs", Context.MODE_PRIVATE)
-            val isEnabled = prefs.getBoolean("pref_vibration_enabled", true)
-            if (!isEnabled) return
+            if (!PreferencesRepository.isVibrationEnabled(this)) return
 
-            val baseStrength = prefs.getInt("pref_vibration_strength", 30).coerceIn(5, 100)
+            val baseStrength = PreferencesRepository.getVibrationStrength(this).coerceIn(5, 100)
 
             if (vibrator != null && vibrator?.hasVibrator() == true) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -340,8 +355,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         handwritingCanvas = root.findViewById(R.id.handwriting_canvas)
 
         // 鍵盤高度拉伸調整（支援上下拖動自由縮放大小，預設 240dp）
-        val prefs = getSharedPreferences("ime_prefs", Context.MODE_PRIVATE)
-        val savedHeightDp = prefs.getInt("pref_keyboard_height_dp", KEYBOARD_DEFAULT_HEIGHT_DP)
+        val savedHeightDp = PreferencesRepository.getKeyboardHeightDp(this)
         val density = resources.displayMetrics.density
         layoutMainFrame.layoutParams.height = (savedHeightDp * density).toInt()
 
@@ -368,7 +382,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     val finalDp = (layoutMainFrame.height / density).toInt()
-                    prefs.edit().putInt("pref_keyboard_height_dp", finalDp).apply()
+                    PreferencesRepository.setKeyboardHeightDp(this, finalDp)
                     triggerHapticFeedback()
                     true
                 }
@@ -381,9 +395,11 @@ class ZhuyinInputMethodService : InputMethodService() {
                 googleRecognizer?.recognize(
                     strokes,
                     onSuccess = { texts ->
-                        val candidates = texts.map { DictEntry(it, "", 100000) }
-                        if (candidates.isNotEmpty()) {
-                            updateCandidateBar(candidates)
+                        if (isInputViewShown && currentMode == KeyboardMode.HANDWRITING) {
+                            val candidates = texts.map { DictEntry(it, "", 100000) }
+                            if (candidates.isNotEmpty()) {
+                                updateCandidateBar(candidates)
+                            }
                         }
                     },
                     onError = {
@@ -433,17 +449,21 @@ class ZhuyinInputMethodService : InputMethodService() {
             closeCandidateGrid()
         }
 
-        setup12KeyLayout(root)
-        setupZhuyinFullLayout(root)
-        setupQwertyLayout(root)
-        setupSymbolPanel(root)
-        setupSideActions(root)
-        setupBottomActions(root)
+        try {
+            setup12KeyLayout(root)
+            setupZhuyinFullLayout(root)
+            setupQwertyLayout(root)
+            setupSymbolPanel(root)
+            setupSideActions(root)
+            setupBottomActions(root)
 
-        applyOneHandedMode()
-        ThemeManager.applyTheme(root, ThemeManager.getCurrentTheme(this))
+            applyOneHandedMode()
+            ThemeManager.applyTheme(root, ThemeManager.getCurrentTheme(this))
 
-        updateKeyboardModeUI()
+            updateKeyboardModeUI()
+        } catch (e: Exception) {
+            android.util.Log.e("BopomofoIME", "onCreateInputView 初始化異常", e)
+        }
         return root
     }
 
@@ -556,7 +576,6 @@ class ZhuyinInputMethodService : InputMethodService() {
             val selected = chars[menuItem.itemId]
             val finalStr = if (isCapsLock && selected.length == 1 && selected[0].isLetter()) selected.uppercase() else selected
             commitTextDirectly(finalStr)
-            resetT9MultiTap()
             true
         }
         popup.show()
@@ -579,7 +598,6 @@ class ZhuyinInputMethodService : InputMethodService() {
             val selectedChar = chars[item.itemId]
             val finalChar = if (isCapsLock && selectedChar.isLetter()) selectedChar.uppercaseChar() else selectedChar
             commitTextDirectly(finalChar.toString())
-            resetT9MultiTap()
             true
         }
         popup.show()
@@ -622,8 +640,6 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
         popup.show()
     }
-
-    private fun resetT9MultiTap() {}
 
     /**
      * 數字/英文混合模式字符表
@@ -696,16 +712,10 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         row3?.removeAllViews()
 
-        // 1. Shift 大小寫切換鍵 (左側)
+        // 1. Shift 大小寫切換鍵 (左側，方案 1 直覺三態：小寫空心⇧、單次高亮實心⬆、鎖定高亮藍底白字⇪)
         val btnShift = Button(this).apply {
-            text = when (englishCaseState) {
-                EnglishCaseState.LOWER -> "⇧"
-                EnglishCaseState.FIRST_UPPER -> "⇧•"
-                EnglishCaseState.ALL_UPPER -> "⇪"
-            }
+            tag = "shift"
             textSize = 18f
-            setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
-            setBackgroundResource(R.drawable.bg_key_action)
             val params = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1.5f).apply {
                 setMargins(2, 2, 2, 2)
             }
@@ -715,6 +725,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 cycleEnglishCase()
             }
         }
+        applyShiftStyle(btnShift)
         row3?.addView(btnShift)
 
         // 2. 字母鍵 Z X C V B N M
@@ -821,6 +832,7 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     private fun createQwertyKey(text: String, weight: Float, longClickChar: String? = null): Button {
         return Button(this).apply {
+            tag = text.lowercase()
             this.text = if (isCapsLock) text.uppercase() else text.lowercase()
             textSize = 18f
             setTextColor(ContextCompat.getColor(context, R.color.kb_text_primary))
@@ -849,9 +861,55 @@ class ZhuyinInputMethodService : InputMethodService() {
         }
     }
 
+    private fun applyShiftStyle(btn: Button) {
+        when (englishCaseState) {
+            EnglishCaseState.LOWER -> {
+                btn.text = "⇧"
+                btn.setTextColor(ContextCompat.getColor(this, R.color.kb_text_primary))
+                btn.setBackgroundResource(R.drawable.bg_key_action)
+            }
+            EnglishCaseState.FIRST_UPPER -> {
+                btn.text = "⬆"
+                btn.setTextColor(ContextCompat.getColor(this, R.color.kb_accent))
+                btn.setBackgroundResource(R.drawable.bg_key_action)
+            }
+            EnglishCaseState.ALL_UPPER -> {
+                btn.text = "⇪"
+                btn.setTextColor(Color.WHITE)
+                btn.setBackgroundResource(R.drawable.bg_key_active)
+            }
+        }
+    }
+
     private fun updateQwertyKeysText() {
-        val root = layoutQwerty
-        setupQwertyLayout(root)
+        if (!::layoutQwerty.isInitialized) return
+        val row1 = layoutQwerty.findViewById<LinearLayout>(R.id.qwerty_row_1)
+        if (row1 == null || row1.childCount == 0) {
+            setupQwertyLayout(layoutQwerty)
+            return
+        }
+        val row2 = layoutQwerty.findViewById<LinearLayout>(R.id.qwerty_row_2)
+        val row3 = layoutQwerty.findViewById<LinearLayout>(R.id.qwerty_row_3)
+        val updateRow = { row: LinearLayout? ->
+            if (row != null) {
+                for (i in 0 until row.childCount) {
+                    val child = row.getChildAt(i)
+                    if (child is Button) {
+                        val t = child.tag
+                        if (t is String) {
+                            if (t == "shift") {
+                                applyShiftStyle(child)
+                            } else {
+                                child.text = if (isCapsLock) t.uppercase() else t.lowercase()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        updateRow(row1)
+        updateRow(row2)
+        updateRow(row3)
     }
 
     private fun cycleEnglishCase() {
@@ -1569,7 +1627,6 @@ class ZhuyinInputMethodService : InputMethodService() {
                 else -> {
                     engine.clear()
                     lastCommittedWord = null
-                    resetT9MultiTap()
                     currentInputConnection?.setComposingText("", 1)
                     refreshUI(emptyList())
                 }
@@ -1656,6 +1713,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             triggerHapticFeedback()
             when (currentMode) {
                 KeyboardMode.ZHUYIN -> {
+                    lastChineseMode = KeyboardMode.ZHUYIN_FULL
                     currentMode = KeyboardMode.ZHUYIN_FULL
                     engine.clear()
                     fullZhuyinBuffer.clear()
@@ -1664,6 +1722,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                     updateKeyboardModeUI()
                 }
                 KeyboardMode.ZHUYIN_FULL -> {
+                    lastChineseMode = KeyboardMode.ZHUYIN
                     currentMode = KeyboardMode.ZHUYIN
                     engine.clear()
                     fullZhuyinBuffer.clear()
@@ -1672,7 +1731,12 @@ class ZhuyinInputMethodService : InputMethodService() {
                     updateKeyboardModeUI()
                 }
                 KeyboardMode.ENGLISH_QWERTY -> {
-                    cycleEnglishCase()
+                    currentMode = lastChineseMode
+                    engine.clear()
+                    fullZhuyinBuffer.clear()
+                    currentInputConnection?.setComposingText("", 1)
+                    refreshUI(emptyList())
+                    updateKeyboardModeUI()
                 }
                 KeyboardMode.NUMBER_SYM -> {
                     currentMode = KeyboardMode.ZHUYIN
@@ -1744,6 +1808,9 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         btnSpaceSwipe.onSwipeListener = { direction ->
             triggerHapticFeedback()
+            if (currentMode == KeyboardMode.ZHUYIN || currentMode == KeyboardMode.ZHUYIN_FULL) {
+                lastChineseMode = currentMode
+            }
             engine.clear()
             fullZhuyinBuffer.clear()
             currentInputConnection?.setComposingText("", 1)
@@ -1753,14 +1820,14 @@ class ZhuyinInputMethodService : InputMethodService() {
                 currentMode = when (currentMode) {
                     KeyboardMode.ZHUYIN, KeyboardMode.ZHUYIN_FULL -> KeyboardMode.ENGLISH_QWERTY
                     KeyboardMode.ENGLISH_QWERTY -> KeyboardMode.HANDWRITING
-                    KeyboardMode.HANDWRITING -> KeyboardMode.ZHUYIN
-                    KeyboardMode.NUMBER_SYM -> KeyboardMode.ZHUYIN
+                    KeyboardMode.HANDWRITING -> lastChineseMode
+                    KeyboardMode.NUMBER_SYM -> lastChineseMode
                 }
             } else if (direction == SwipeKeyButton.Direction.LEFT) {
                 currentMode = when (currentMode) {
                     KeyboardMode.ZHUYIN, KeyboardMode.ZHUYIN_FULL -> KeyboardMode.HANDWRITING
                     KeyboardMode.HANDWRITING -> KeyboardMode.ENGLISH_QWERTY
-                    KeyboardMode.ENGLISH_QWERTY -> KeyboardMode.ZHUYIN
+                    KeyboardMode.ENGLISH_QWERTY -> lastChineseMode
                     KeyboardMode.NUMBER_SYM -> KeyboardMode.HANDWRITING
                 }
             }
@@ -1781,13 +1848,11 @@ class ZhuyinInputMethodService : InputMethodService() {
         // 逗點與句號 (數字模式半形「,」與「:」；注音繁體全形，簡體/英文半形)
         btnComma.setOnClickListener {
             triggerHapticFeedback()
-            resetT9MultiTap()
             val sym = if (currentMode == KeyboardMode.NUMBER_SYM) "," else if (isTraditionalMode()) "，" else ","
             commitSymbol(sym)
         }
         btnPeriod.setOnClickListener {
             triggerHapticFeedback()
-            resetT9MultiTap()
             val sym = if (currentMode == KeyboardMode.NUMBER_SYM) ":" else if (isTraditionalMode()) "。" else "."
             commitSymbol(sym)
         }
@@ -1922,11 +1987,7 @@ class ZhuyinInputMethodService : InputMethodService() {
                 if (::layoutHandwriting.isInitialized) layoutHandwriting.visibility = View.GONE
 
                 btnMode123.text = formatMode123Label("123")
-                btnLangToggle.text = when (englishCaseState) {
-                    EnglishCaseState.LOWER -> "abc"
-                    EnglishCaseState.FIRST_UPPER -> "⇧Abc"
-                    EnglishCaseState.ALL_UPPER -> "⇪ABC"
-                }
+                btnLangToggle.text = if (isSimplified) "中文·簡" else "中文"
                 btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("EN", "手寫", "中文")
                 btnQwertyToggle.visibility = View.GONE
 
@@ -2189,7 +2250,6 @@ class ZhuyinInputMethodService : InputMethodService() {
         triggerHapticFeedback()
         lastUserTypingTime = SystemClock.uptimeMillis()
         dismissHomophonePopup()
-        resetT9MultiTap()
         if (isHomophoneSelectionMode) {
             exitHomophoneSelectionMode()
             return
@@ -2248,7 +2308,6 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     private fun commitSymbol(text: String) {
-        resetT9MultiTap()
         if (engine.hasComposing()) {
             engine.clear()
             currentInputConnection?.finishComposingText()
@@ -2263,20 +2322,30 @@ class ZhuyinInputMethodService : InputMethodService() {
         showNextWordPredictions("")
     }
 
+    private fun safeCommitText(text: String): Boolean {
+        val ic = currentInputConnection
+        if (ic == null) {
+            android.util.Log.w("BopomofoIME", "safeCommitText 失敗：InputConnection 為 null")
+            return false
+        }
+        val result = ic.commitText(text, 1)
+        ic.finishComposingText()
+        return result
+    }
+
     private fun commitTextDirectly(text: String) {
         customComposingWord = null
         replacedCharsMap.clear()
         isHomophoneSelectionMode = false
         homophoneCharIndex = -1
-        currentInputConnection?.commitText(text, 1)
-        currentInputConnection?.finishComposingText()
+        safeCommitText(text)
         lastCommittedWord = null
         showNextWordPredictions("")
     }
 
     private fun commitProcessedText(text: String) {
         val finalText = if (isSimplified) ChineseConverter.toSimplified(text) else text
-        currentInputConnection?.commitText(finalText, 1)
+        safeCommitText(finalText)
     }
 
 
@@ -2467,8 +2536,7 @@ class ZhuyinInputMethodService : InputMethodService() {
 
     fun applyOneHandedMode() {
         val root = rootView ?: return
-        val prefs = getSharedPreferences("ime_prefs", Context.MODE_PRIVATE)
-        val modeId = prefs.getString("pref_one_handed_mode", OneHandedMode.FULL.id)
+        val modeId = PreferencesRepository.getOneHandedMode(this)
         currentOneHandedMode = OneHandedMode.values().find { it.id == modeId } ?: OneHandedMode.FULL
 
         val density = resources.displayMetrics.density
@@ -2494,8 +2562,7 @@ class ZhuyinInputMethodService : InputMethodService() {
             OneHandedMode.RIGHT -> OneHandedMode.LEFT
             OneHandedMode.LEFT -> OneHandedMode.FULL
         }
-        val prefs = getSharedPreferences("ime_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("pref_one_handed_mode", currentOneHandedMode.id).apply()
+        PreferencesRepository.setOneHandedMode(this, currentOneHandedMode.id)
         applyOneHandedMode()
     }
 
@@ -2741,8 +2808,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         engine.clear()
         fullZhuyinBuffer.clear()
         val finalText = if (isSimplified) ChineseConverter.toSimplified(word) else word
-        currentInputConnection?.commitText(finalText, 1)
-        currentInputConnection?.finishComposingText()
+        safeCommitText(finalText)
         if (::handwritingCanvas.isInitialized) {
             handwritingCanvas.clearCanvas()
         }
@@ -2840,16 +2906,26 @@ class ZhuyinInputMethodService : InputMethodService() {
 
         // 2. 組合鍵（如 Ctrl+C, Ctrl+V, Alt 等）直接放行交由系統處理
         if (event.isCtrlPressed || event.isAltPressed) {
+            isPhysicalShiftPressed = false
             return super.onKeyDown(keyCode, event)
         }
 
         // 3. 英文模式下：實體鍵盤直接輸出字元
         if (currentMode == KeyboardMode.ENGLISH_QWERTY) {
+            if (keyCode != KeyEvent.KEYCODE_SHIFT_LEFT && keyCode != KeyEvent.KEYCODE_SHIFT_RIGHT) {
+                isPhysicalShiftPressed = false
+            }
             return super.onKeyDown(keyCode, event)
         }
 
         // 4. 注音模式下的實體鍵盤處理
         if (currentMode == KeyboardMode.ZHUYIN || currentMode == KeyboardMode.ZHUYIN_FULL) {
+            // Shift 組合鍵（如 Shift + 數字 輸出 #, $, % 等符號）：放行由系統輸出符號，避免被劫持為聲調
+            if (event.isShiftPressed && keyCode != KeyEvent.KEYCODE_SHIFT_LEFT && keyCode != KeyEvent.KEYCODE_SHIFT_RIGHT) {
+                isPhysicalShiftPressed = false
+                return super.onKeyDown(keyCode, event)
+            }
+
             // A. Backspace 刪除
             if (keyCode == KeyEvent.KEYCODE_DEL) {
                 if (currentMode == KeyboardMode.ZHUYIN_FULL && fullZhuyinBuffer.isNotEmpty()) {
@@ -2941,11 +3017,17 @@ class ZhuyinInputMethodService : InputMethodService() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        // Shift 單按一秒切換中英文（PC 經典體驗）
+        // Shift 單按一秒切換中英文（PC 經典體驗，支援 9 鍵與 41 鍵全鍵盤）
         if (keyCode == KeyEvent.KEYCODE_SHIFT_LEFT || keyCode == KeyEvent.KEYCODE_SHIFT_RIGHT) {
             if (isPhysicalShiftPressed && !event.isCanceled) {
-                currentMode = if (currentMode == KeyboardMode.ZHUYIN) KeyboardMode.ENGLISH_QWERTY else KeyboardMode.ZHUYIN
+                if (currentMode == KeyboardMode.ZHUYIN || currentMode == KeyboardMode.ZHUYIN_FULL) {
+                    lastChineseMode = currentMode
+                    currentMode = KeyboardMode.ENGLISH_QWERTY
+                } else if (currentMode == KeyboardMode.ENGLISH_QWERTY) {
+                    currentMode = lastChineseMode
+                }
                 engine.clear()
+                fullZhuyinBuffer.clear()
                 currentInputConnection?.finishComposingText()
                 refreshUI(emptyList())
                 updateKeyboardModeUI()
@@ -2963,9 +3045,12 @@ class ZhuyinInputMethodService : InputMethodService() {
             isHomophoneSelectionMode = false
             homophoneCharIndex = -1
         }
-        engine.clear()
+        isRepeatingBackspace = false
+        repeatHandler.removeCallbacks(backspaceRunnable)
+        if (::engine.isInitialized) {
+            engine.clear()
+        }
         lastCommittedWord = null
-        resetT9MultiTap()
         clearCandidateBar()
         currentInputConnection?.finishComposingText()
     }

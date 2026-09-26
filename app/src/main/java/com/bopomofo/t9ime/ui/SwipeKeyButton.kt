@@ -144,7 +144,8 @@ class SwipeKeyButton @JvmOverloads constructor(
                     tv.animate().scaleX(1.35f).scaleY(1.35f).alpha(1.0f).setDuration(90).start()
                 } else {
                     tv.background = null
-                    tv.setTextColor(Color.parseColor("#475569"))
+                    val normalColor = androidx.core.content.ContextCompat.getColor(context, R.color.kb_text_primary)
+                    tv.setTextColor(normalColor)
                     tv.animate().scaleX(1.0f).scaleY(1.0f).alpha(if (newDir == null) 1.0f else 0.4f).setDuration(90).start()
                 }
             }
@@ -157,10 +158,11 @@ class SwipeKeyButton @JvmOverloads constructor(
     }
 
     private fun resetPopupItemStates() {
+        val normalColor = androidx.core.content.ContextCompat.getColor(context, R.color.kb_text_primary)
         val reset = { tv: TextView? ->
             if (tv != null) {
                 tv.background = null
-                tv.setTextColor(Color.parseColor("#334155"))
+                tv.setTextColor(normalColor)
                 tv.scaleX = 1.0f
                 tv.scaleY = 1.0f
                 tv.alpha = 1.0f

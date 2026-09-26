@@ -37,6 +37,12 @@ class ZhuyinT9Engine(private val context: Context) {
     private var charZhuyinMap = mutableMapOf<Char, MutableList<String>>()
     @Volatile
     private var initialMap = mutableMapOf<String, MutableList<DictEntry>>()
+    /**
+     * 反向音節索引：cleanZhuyin(去聲調) -> DictEntry 列表（單字）
+     * 在載入字典時同步建立，讓 searchFullZhuyin 步驟 5 從 O(n) 線性掃描降至 O(1)
+     */
+    @Volatile
+    private var soundToCharMap = mutableMapOf<String, MutableList<DictEntry>>()
 
     // Bigram 語境關聯索引：prevWord -> (nextWord -> weight)
     private val bigramMap = HashMap<String, MutableMap<String, Int>>()
@@ -85,6 +91,64 @@ class ZhuyinT9Engine(private val context: Context) {
         addBigramPair("台灣", "大學", 600)
         addBigramPair("台灣", "高鐵", 700)
         addBigramPair("捷運", "站", 700)
+        loadBigramFromFile()
+    }
+
+    private fun getBigramFile(): java.io.File? {
+        return try {
+            java.io.File(context.filesDir, "user_bigram.json")
+        } catch (_: Exception) {
+            null
+        }
+    }
+    private val bigramExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val bigramSaveRunnable = Runnable {
+        bigramExecutor.execute {
+            saveBigramToFile()
+        }
+    }
+
+    private fun loadBigramFromFile() {
+        try {
+            val file = getBigramFile() ?: return
+            if (!file.exists()) return
+            val content = file.readText(Charsets.UTF_8)
+            val json = org.json.JSONObject(content)
+            val keys = json.keys()
+            synchronized(bigramMap) {
+                while (keys.hasNext()) {
+                    val prev = keys.next()
+                    val nextObj = json.getJSONObject(prev)
+                    val nextKeys = nextObj.keys()
+                    val map = bigramMap.getOrPut(prev) { HashMap() }
+                    while (nextKeys.hasNext()) {
+                        val next = nextKeys.next()
+                        map[next] = nextObj.getInt(next)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("BopomofoIME", "載入 Bigram 詞頻關聯失敗", e)
+        }
+    }
+
+    private fun saveBigramToFile() {
+        try {
+            val file = getBigramFile() ?: return
+            val json = org.json.JSONObject()
+            synchronized(bigramMap) {
+                for ((prev, nextMap) in bigramMap) {
+                    val nextObj = org.json.JSONObject()
+                    for ((next, weight) in nextMap) {
+                        nextObj.put(next, weight)
+                    }
+                    json.put(prev, nextObj)
+                }
+            }
+            file.writeText(json.toString(), Charsets.UTF_8)
+        } catch (e: Exception) {
+            android.util.Log.e("BopomofoIME", "儲存 Bigram 詞頻關聯失敗", e)
+        }
     }
 
     private fun addBigramPair(prev: String, next: String, weight: Int) {
@@ -94,12 +158,18 @@ class ZhuyinT9Engine(private val context: Context) {
 
     fun learnBigram(prevWord: String, nextWord: String) {
         if (prevWord.isBlank() || nextWord.isBlank()) return
-        addBigramPair(prevWord, nextWord, 500)
+        synchronized(bigramMap) {
+            addBigramPair(prevWord, nextWord, 500)
+        }
+        mainHandler.removeCallbacks(bigramSaveRunnable)
+        mainHandler.postDelayed(bigramSaveRunnable, 2500L)
     }
 
     fun getBigramBoost(prevWord: String?, candidateWord: String): Int {
         if (prevWord == null) return 0
-        return bigramMap[prevWord]?.get(candidateWord) ?: 0
+        return synchronized(bigramMap) {
+            bigramMap[prevWord]?.get(candidateWord) ?: 0
+        }
     }
 
     private fun startAsyncDictionaryLoading() {
@@ -108,7 +178,8 @@ class ZhuyinT9Engine(private val context: Context) {
             val newNextWordMap = mutableMapOf<String, MutableList<DictEntry>>()
             val newCharZhuyinMap = mutableMapOf<Char, MutableList<String>>()
             val newInitialMap = mutableMapOf<String, MutableList<DictEntry>>()
-            loadDictionaryInternal(newTrie, newNextWordMap, newCharZhuyinMap, newInitialMap)
+            val newSoundToCharMap = mutableMapOf<String, MutableList<DictEntry>>()
+            loadDictionaryInternal(newTrie, newNextWordMap, newCharZhuyinMap, newInitialMap, newSoundToCharMap)
             loadUserDictionaryEntries(newTrie, newCharZhuyinMap)
 
             mainHandler.post {
@@ -116,6 +187,7 @@ class ZhuyinT9Engine(private val context: Context) {
                 nextWordMap = newNextWordMap
                 charZhuyinMap = newCharZhuyinMap
                 initialMap = newInitialMap
+                soundToCharMap = newSoundToCharMap
                 isDictionaryLoaded = true
                 if (currentKeys.isNotEmpty()) {
                     recalculate()
@@ -154,7 +226,8 @@ class ZhuyinT9Engine(private val context: Context) {
         targetTrie: TrieDictionary,
         targetNextWordMap: MutableMap<String, MutableList<DictEntry>>,
         targetCharZhuyinMap: MutableMap<Char, MutableList<String>>,
-        targetInitialMap: MutableMap<String, MutableList<DictEntry>>
+        targetInitialMap: MutableMap<String, MutableList<DictEntry>>,
+        targetSoundToCharMap: MutableMap<String, MutableList<DictEntry>>
     ) {
         val nextWordTrack = mutableMapOf<String, HashSet<String>>()
         var accumulatedWeight = 0L
@@ -188,13 +261,16 @@ class ZhuyinT9Engine(private val context: Context) {
                             }
                         }
 
-                        // 統計單字音節歷史頻率（教育部 429 個合法音節）與記錄單字注音查表
+                        // 統計單字音節歷史頻率（教育部 429 個合法音節）與記錄單字注音查表 + 反向音節索引
                         if (word.length == 1) {
-                            val cleanZhuyin = zhuyin.filter { it !in "ˇˋˊ˙" }
                             SyllableManager.addSyllableWeight(cleanZhuyin, weight)
                             val list = targetCharZhuyinMap.getOrPut(word[0]) { ArrayList(2) }
                             if (!list.contains(zhuyin)) {
                                 list.add(zhuyin)
+                            }
+                            val soundList = targetSoundToCharMap.getOrPut(cleanZhuyin) { ArrayList(4) }
+                            if (soundList.none { it.word == word }) {
+                                soundList.add(entry)
                             }
                         }
 
@@ -474,7 +550,7 @@ class ZhuyinT9Engine(private val context: Context) {
                     val subKeys = keys.subList(j, i)
                     val node = trie.searchNode(subKeys)
                     if (node != null && node.exactEntries.isNotEmpty()) {
-                        for (entry in node.exactEntries) {
+                        for (entry in node.exactEntries.values) {
                             val boost = userDict.getBoost(entry.word)
                             val effectiveWeight = entry.weight + boost
                             val logProb = Math.log(maxOf(effectiveWeight.toDouble(), 1.0)) - logTotal
@@ -697,15 +773,22 @@ class ZhuyinT9Engine(private val context: Context) {
             }
         }
 
-        // 5. 單字精確與聲母檢索 (若輸入為單字音節或聲母)
+        // 5. 單字精確與聲母檢索 (若輸入為單字音節或聲母，使用反向音節索引 O(1) 替代全量線性掃描)
         val singleMatches = mutableListOf<DictEntry>()
-        for ((ch, zhuyinList) in charZhuyinMap) {
-            for (z in zhuyinList) {
-                val zClean = z.filter { it !in "ˇˋˊ˙" }
-                if (zClean == cleanInput || (cleanInput.length == 1 && zClean.startsWith(cleanInput))) {
-                    val w = ch.toString()
-                    if (!seenWords.contains(w)) {
-                        singleMatches.add(DictEntry(w, z, 500))
+        soundToCharMap[cleanInput]?.let { entries ->
+            for (e in entries) {
+                if (!seenWords.contains(e.word)) {
+                    singleMatches.add(e)
+                }
+            }
+        }
+        if (cleanInput.length == 1) {
+            for ((syllable, entries) in soundToCharMap) {
+                if (syllable != cleanInput && syllable.startsWith(cleanInput)) {
+                    for (e in entries) {
+                        if (!seenWords.contains(e.word)) {
+                            singleMatches.add(e)
+                        }
                     }
                 }
             }
@@ -744,7 +827,7 @@ class ZhuyinT9Engine(private val context: Context) {
             for (seq in listOf(seqWithTone, seqNoTone).distinct()) {
                 if (seq.isEmpty()) continue
                 val node = trie.searchNode(seq) ?: continue
-                for (e in node.exactEntries) {
+                for (e in node.exactEntries.values) {
                     if (e.word.length == 1 && seen.add(e.word)) {
                         val eCleanZy = e.zhuyin.filter { it !in "ˇˋˊ˙" }
                         if (eCleanZy == cleanZy) {
@@ -818,7 +901,7 @@ class ZhuyinT9Engine(private val context: Context) {
         for (seq in listOf(keys, keysNoTone).distinct()) {
             if (seq.isEmpty()) continue
             val node = trie.searchNode(seq) ?: continue
-            for (e in node.exactEntries) {
+            for (e in node.exactEntries.values) {
                 if (e.word != entry.word && e.zhuyin.isNotEmpty() && seen.add(e.word)) {
                     results.add(e)
                 }

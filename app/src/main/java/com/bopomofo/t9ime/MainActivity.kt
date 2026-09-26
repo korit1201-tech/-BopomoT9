@@ -231,11 +231,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        updateDictStats()
+        try {
+            updateDictStats()
+        } catch (_: Exception) {}
     }
 
     private fun updateDictStats() {
-        val count = userDictManager.getEntryCount()
-        tvDictStats.text = "目前已記錄：$count 個常用專屬詞彙"
+        try {
+            val count = userDictManager.getEntryCount()
+            tvDictStats.text = "目前已記錄：$count 個常用專屬詞彙"
+        } catch (_: Exception) {}
     }
 }
