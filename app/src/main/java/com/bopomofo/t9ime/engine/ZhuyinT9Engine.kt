@@ -317,6 +317,34 @@ class ZhuyinT9Engine(private val context: Context) {
         return cachedCandidates
     }
 
+    /**
+     * 現代漢語詞長優先評分模型（Word Length Preference Model）：
+     * 1. 現代漢語中雙字詞（2字詞）佔 75% 以上，三、四字詞次之，單字在連續按鍵下不應搶佔詞首。
+     * 2. 當輸入按鍵數較多時（>= 3 鍵），優先保證 2、3、4 字合法詞排在最前面。
+     */
+    private fun getEffectiveWeight(entry: DictEntry, inputKeyCount: Int): Double {
+        val userBoost = userDict.getBoost(entry.word)
+        if (userBoost > 0) {
+            return 1_000_000_000.0 + userBoost
+        }
+
+        val rawWeight = entry.weight.toDouble()
+        val lengthMultiplier = when (entry.word.length) {
+            2 -> 5.0      // 雙字詞核心加成（中文日常最高頻詞型，佔70%+）
+            3 -> 3.5      // 三字詞加成
+            4 -> 3.0      // 四字成語/專有名詞加成
+            1 -> {
+                // 單字：若輸入按鍵數達到 3 鍵以上（已經具備拼出雙字詞的能力），
+                // 降低單字優先權，避免散字擋在雙字詞前面
+                if (inputKeyCount >= 3) 0.15 else 1.0
+            }
+            else -> 1.5
+        }
+
+        val tolerantMultiplier = if (entry.isTolerant) 0.35 else 1.0
+        return rawWeight * lengthMultiplier * tolerantMultiplier
+    }
+
     // ───────── 核心查詢邏輯 ─────────
 
     private fun recalculate() {
@@ -338,11 +366,14 @@ class ZhuyinT9Engine(private val context: Context) {
             } else list
         }
 
-        // Tier 1: 完全匹配詞排序（使用者常選優選詞穩居第一位，原生匹配字優先於容錯字）
+        val cleanKeys = currentKeys.filter { it != 11 }
+        val phonemeKeyLen = cleanKeys.size
+
+        // Tier 1: 完全匹配詞排序（使用者常選優選詞穩居第一位，原生匹配字優先於容錯字，2/3/4字詞優先於散字）
         val rankedExact = filterTone(exactResults).sortedWith(
             compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
                 .thenByDescending { !it.isTolerant }
-                .thenByDescending { it.weight + userDict.getBoost(it.word) }
+                .thenByDescending { getEffectiveWeight(it, phonemeKeyLen) }
         )
 
         // Tier 2: DP 最佳長句分詞（一口氣輸入較長句子 >= 4 鍵時）
@@ -350,11 +381,11 @@ class ZhuyinT9Engine(private val context: Context) {
             findBestSentence(currentKeys)
         } else null
 
-        // Tier 3: 前綴預測詞排序
+        // Tier 3: 前綴預測詞排序（詞長優先：2字詞 > 3字詞 > 4字詞 > 單字）
         val rankedPrefix = filterTone(prefixResults).sortedWith(
             compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
                 .thenByDescending { !it.isTolerant }
-                .thenByDescending { it.weight + userDict.getBoost(it.word) }
+                .thenByDescending { getEffectiveWeight(it, phonemeKeyLen) }
         )
 
         // 組合候選詞（階梯式嚴格優先級）：
@@ -377,8 +408,6 @@ class ZhuyinT9Engine(private val context: Context) {
         }
 
         // 產生左側注音音節/詞彙組合列表（兼顧單字合法音節與多字詞組合，杜絕組合遺失與無字可選）
-        val cleanKeys = currentKeys.filter { it != 11 }
-        val phonemeKeyLen = cleanKeys.size
         val comboSet = LinkedHashSet<String>()
 
         // 1. 從候選字詞列表提取所有可能的前綴注音走向（涵蓋單字 ㄐㄧㄢ 與多字詞 ㄐㄧㄓ、ㄍㄣㄓ、ㄍㄣㄗ 等）
@@ -427,7 +456,7 @@ class ZhuyinT9Engine(private val context: Context) {
         dp[0] = 0.0
         val bestSplit = arrayOfNulls<Pair<Int, DictEntry>>(n + 1)
 
-        val wordBonus = 3.0
+        val wordBonus = 12.0 // 參考 libchewing：強烈長詞偏好，優先切分 2、3、4 字詞，徹底杜絕單字碎散切分
         val logTotal = if (logTotalWeight > 0) logTotalWeight else 17.91
 
         for (i in 1..n) {
@@ -529,22 +558,16 @@ class ZhuyinT9Engine(private val context: Context) {
     var currentContextWord: String? = null
 
     private fun applyLockFilter(baseList: List<DictEntry>) {
-        val candidateList = if (currentContextWord != null) {
-            baseList.sortedByDescending { it.weight + getBigramBoost(currentContextWord, it.word) * 20_000 }
-        } else {
-            baseList
-        }
-
         val locked = lockedZhuyinCombo
         if (locked != null) {
             val cleanLock = locked.filter { it !in "ˇˋˊ˙" }
-            val filtered = candidateList.filter { entry ->
+            val filtered = baseList.filter { entry ->
                 entry.zhuyin.filter { it !in "ˇˋˊ˙" }.startsWith(cleanLock)
             }
-            cachedCandidates = if (filtered.isNotEmpty()) filtered else candidateList
+            cachedCandidates = if (filtered.isNotEmpty()) filtered else baseList
             return
         }
-        cachedCandidates = candidateList
+        cachedCandidates = baseList
     }
 
     private fun recalculateCandidatesOnly() {
@@ -688,11 +711,11 @@ class ZhuyinT9Engine(private val context: Context) {
             }
         }
 
-        // 6. 若有上下文前詞，給予 Bigram 語境加權重排
-        val activeContext = contextWord ?: currentContextWord
-        if (activeContext != null) {
-            results.sortByDescending { it.weight + getBigramBoost(activeContext, it.word) * 20_000 }
-        }
+        // 6. 依據詞長偏好模型進行候選詞整體重排（2字詞 > 3字詞 > 4字詞 > 單字）
+        results.sortWith(
+            compareByDescending<DictEntry> { userDict.getBoost(it.word) > 0 }
+                .thenByDescending { getEffectiveWeight(it, cleanInput.length) }
+        )
 
         return results
     }
