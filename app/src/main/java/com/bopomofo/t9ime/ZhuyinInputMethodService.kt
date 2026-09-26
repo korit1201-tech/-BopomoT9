@@ -251,6 +251,7 @@ class ZhuyinInputMethodService : InputMethodService() {
         rootView?.let { root ->
             ThemeManager.applyTheme(root, ThemeManager.getCurrentTheme(this))
             applyOneHandedMode()
+            updateKeyboardModeUI()
         }
     }
 
@@ -1923,11 +1924,11 @@ class ZhuyinInputMethodService : InputMethodService() {
         val primaryColor = ContextCompat.getColor(this, R.color.kb_text_primary)
         val secondaryColor = ContextCompat.getColor(this, R.color.kb_text_secondary)
 
-        spannable.setSpan(RelativeSizeSpan(1.20f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(RelativeSizeSpan(1.40f), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(StyleSpan(Typeface.BOLD), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(ForegroundColorSpan(primaryColor), 0, split, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
 
-        spannable.setSpan(RelativeSizeSpan(0.52f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        spannable.setSpan(RelativeSizeSpan(0.55f), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         spannable.setSpan(ForegroundColorSpan(secondaryColor), split + 1, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         return spannable
     }
@@ -1989,6 +1990,8 @@ class ZhuyinInputMethodService : InputMethodService() {
                 btnLangToggle.text = if (isSimplified) "9鍵·簡" else "9鍵·繁"
                 btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "英文", "手寫")
                 btnQwertyToggle.visibility = View.GONE
+                if (::btnComma.isInitialized) btnComma.text = if (isTraditionalMode()) "，" else ","
+                if (::btnPeriod.isInitialized) btnPeriod.text = if (isTraditionalMode()) "。" else "."
 
                 update12KeyLabelsZhuyin()
                 if (::btnSymAt.isInitialized) {
@@ -2007,6 +2010,8 @@ class ZhuyinInputMethodService : InputMethodService() {
                 btnLangToggle.text = if (isSimplified) "全鍵·簡" else "全鍵·繁"
                 btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("中", "英文", "手寫")
                 btnQwertyToggle.visibility = View.GONE
+                if (::btnComma.isInitialized) btnComma.text = if (isTraditionalMode()) "，" else ","
+                if (::btnPeriod.isInitialized) btnPeriod.text = if (isTraditionalMode()) "。" else "."
             }
             KeyboardMode.NUMBER_SYM -> {
                 layout12Key.visibility = View.VISIBLE
@@ -2019,6 +2024,8 @@ class ZhuyinInputMethodService : InputMethodService() {
                 btnSpaceSwipe.text = "空格"
                 btnQwertyToggle.visibility = View.VISIBLE
                 btnQwertyToggle.text = "( )"
+                if (::btnComma.isInitialized) btnComma.text = ","
+                if (::btnPeriod.isInitialized) btnPeriod.text = ":"
 
                 update12KeyLabelsNumbers()
                 if (::btnSymAt.isInitialized) {
@@ -2037,6 +2044,8 @@ class ZhuyinInputMethodService : InputMethodService() {
                 btnLangToggle.text = formatAbbrevLabel()
                 btnSpaceSwipe.text = formatSpaceChineseSubModeLabel("EN", "手寫", "中文")
                 btnQwertyToggle.visibility = View.GONE
+                if (::btnComma.isInitialized) btnComma.text = ","
+                if (::btnPeriod.isInitialized) btnPeriod.text = "."
 
                 updateQwertyKeysText()
                 if (::btnSymAt.isInitialized) {
